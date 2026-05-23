@@ -1,0 +1,61 @@
+{
+  "name": "@mixerlink/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop companion app for FL Studio collaboration.",
+  "author": "MixerLink",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "app:dev": "node scripts/dev-electron.cjs",
+    "build": "vite build --base ./",
+    "app:dist": "npm run build --workspace @mixerlink/scanner && npm run build && electron-builder --win portable",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mixerlink/protocol": "0.1.0",
+    "@mixerlink/shared": "0.1.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.3.3",
+    "ws": "^8.17.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.29",
+    "@types/react-dom": "^18.3.0",
+    "electron": "31.7.7",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.5.3"
+  },
+  "build": {
+    "appId": "com.mixerlink.desktop",
+    "productName": "MixerLink",
+    "electronVersion": "31.7.7",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../packages/scanner/dist",
+        "to": "scanner"
+      },
+      {
+        "from": "../../packages/scanner/package.json",
+        "to": "scanner/package.json"
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "portable"
+      ]
+    }
+  }
+}

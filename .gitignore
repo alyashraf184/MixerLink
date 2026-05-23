@@ -1,0 +1,24 @@
+node_modules/
+dist/
+build/
+release/
+.turbo/
+.vite/
+.env
+.env.*
+*.log
+*.tsbuildinfo
+*.asar
+*.exe
+
+# Desktop build artifacts
+apps/**/dist/
+apps/**/release/
+packages/**/dist/
+src-tauri/target/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
