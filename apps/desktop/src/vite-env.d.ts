@@ -6,6 +6,9 @@ declare global {
   interface Window {
     mixerlink?: {
       scanCompatibility: () => Promise<CompatibilitySnapshot>;
+      getCustomPluginFolders: () => Promise<string[]>;
+      addCustomPluginFolder: () => Promise<string[]>;
+      removeCustomPluginFolder: (folder: string) => Promise<string[]>;
     };
   }
 }

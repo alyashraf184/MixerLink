@@ -10,7 +10,7 @@
     "dev": "vite",
     "app:dev": "node scripts/dev-electron.cjs",
     "build": "vite build --base ./",
-    "app:dist": "npm run build --workspace @mixerlink/scanner && npm run build && electron-builder --win portable",
+    "app:dist": "npm run build --workspace @mixerlink/scanner && npm run build && electron-builder --win dir",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -54,7 +54,7 @@
     "win": {
       "signAndEditExecutable": false,
       "target": [
-        "portable"
+        "dir"
       ]
     }
   }

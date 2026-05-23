@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { ClientMessage, ServerMessage } from "@mixerlink/protocol";
-import type { CompatibilitySnapshot, SessionState } from "@mixerlink/shared";
+import {
+  compareCompatibilitySnapshots,
+  type CompatibilityComparison,
+  type CompatibilitySnapshot,
+  type SessionState
+} from "@mixerlink/shared";
 import "./styles.css";
 
 const relayUrl = "ws://localhost:4317";
@@ -49,6 +54,7 @@ function App() {
   const [copiedSessionCode, setCopiedSessionCode] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [isScanningCompatibility, setIsScanningCompatibility] = useState(false);
+  const [customPluginFolders, setCustomPluginFolders] = useState<string[]>([]);
 
   useEffect(() => {
     const socket = new WebSocket(relayUrl);
@@ -104,9 +110,42 @@ function App() {
     localStorage.setItem("mixerlink.displayName", displayName);
   }, [displayName]);
 
+  useEffect(() => {
+    if (!window.mixerlink) {
+      return;
+    }
+
+    window.mixerlink.getCustomPluginFolders().then(setCustomPluginFolders).catch(() => {
+      setCustomPluginFolders([]);
+    });
+  }, []);
+
   const canSend = connectionStatus === "connected";
   const collaboratorCount = useMemo(() => session?.collaborators.length ?? 0, [session]);
   const hasSharedCompatibility = Boolean(ownCollaboratorId && session?.compatibility[ownCollaboratorId]);
+  const compatibilityReports = useMemo(() => {
+    if (!session || !ownCollaboratorId) {
+      return [];
+    }
+
+    const ownSnapshot = session.compatibility[ownCollaboratorId];
+    if (!ownSnapshot) {
+      return [];
+    }
+
+    return session.collaborators
+      .filter((collaborator) => collaborator.id !== ownCollaboratorId)
+      .map((collaborator) => {
+        const otherSnapshot = session.compatibility[collaborator.id];
+
+        return {
+          collaborator,
+          comparison: otherSnapshot
+            ? compareCompatibilitySnapshots(ownCollaboratorId, ownSnapshot, collaborator.id, otherSnapshot)
+            : undefined
+        };
+      });
+  }, [ownCollaboratorId, session]);
 
   function send(message: ClientMessage) {
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
@@ -162,6 +201,27 @@ function App() {
     } finally {
       setIsScanningCompatibility(false);
     }
+  }
+
+  async function addPluginFolder() {
+    if (!window.mixerlink) {
+      setNotice("Custom plugin folders are available in the desktop app.");
+      return;
+    }
+
+    const folders = await window.mixerlink.addCustomPluginFolder();
+    setCustomPluginFolders(folders);
+    setNotice(folders.length > 0 ? "Custom plugin folder list updated." : "No custom plugin folder selected.");
+  }
+
+  async function removePluginFolder(folder: string) {
+    if (!window.mixerlink) {
+      return;
+    }
+
+    const folders = await window.mixerlink.removeCustomPluginFolder(folder);
+    setCustomPluginFolders(folders);
+    setNotice("Custom plugin folder removed.");
   }
 
   function leaveSession() {
@@ -277,6 +337,30 @@ function App() {
               Leave Session
             </button>
           </div>
+          <div className="plugin-folder-manager">
+            <button type="button" className="secondary compact" onClick={addPluginFolder}>
+              Add Plugin Folder
+            </button>
+            {customPluginFolders.length > 0 ? (
+              <ul>
+                {customPluginFolders.map((folder) => (
+                  <li key={folder}>
+                    <span>{folder}</span>
+                    <button
+                      type="button"
+                      className="remove-folder-button"
+                      aria-label={`Remove ${folder}`}
+                      onClick={() => removePluginFolder(folder)}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No custom plugin folders added.</p>
+            )}
+          </div>
         </div>
       </section>
       <section className={`status-panel ${session ? "session-live" : ""}`}>
@@ -320,6 +404,11 @@ function App() {
                 <h3>Compatibility</h3>
                 <span>{Object.keys(session.compatibility).length} shared</span>
               </div>
+              {ownCollaboratorId && session.compatibility[ownCollaboratorId] ? (
+                <CompatibilityReportList reports={compatibilityReports} />
+              ) : (
+                <p className="empty-compatibility">Share your compatibility scan to compare with collaborators.</p>
+              )}
               <div className="compatibility-list">
                 {session.collaborators.map((collaborator) => {
                   const compatibility = session.compatibility[collaborator.id];
@@ -339,6 +428,9 @@ function App() {
                                 {compatibility.scan.pluginFolders.length} folders scanned /{" "}
                                 {compatibility.scan.warnings.length} warnings
                               </p>
+                              {compatibility.scan.customPluginFolders.length > 0 ? (
+                                <p>{compatibility.scan.customPluginFolders.length} custom folders included</p>
+                              ) : null}
                               {compatibility.scan.pluginFolders.length > 0 ? (
                                 <details>
                                   <summary>Scanned folders</summary>
@@ -363,7 +455,14 @@ function App() {
                           ) : null}
                           <ul className="plugin-pill-list">
                             {compatibility.plugins.map((plugin) => (
-                              <li key={`${collaborator.id}-${plugin.name}`} className="matched">{plugin.name}</li>
+                              <li
+                                key={`${collaborator.id}-${plugin.name}-${plugin.path ?? ""}`}
+                                className={plugin.source === "custom" ? "custom" : "matched"}
+                                title={plugin.path}
+                              >
+                                {plugin.name}
+                                {plugin.version ? ` ${plugin.version}` : ""}
+                              </li>
                             ))}
                             {(compatibility.missingPlugins ?? []).map((plugin) => (
                               <li key={`${collaborator.id}-${plugin.name}`} className="missing">{plugin.name}</li>
@@ -398,6 +497,86 @@ function App() {
         ) : null}
       </section>
     </main>
+  );
+}
+
+function CompatibilityReportList({
+  reports
+}: {
+  reports: Array<{
+    collaborator: SessionState["collaborators"][number];
+    comparison?: CompatibilityComparison;
+  }>;
+}) {
+  if (reports.length === 0) {
+    return <p className="empty-compatibility">Waiting for another collaborator to join.</p>;
+  }
+
+  return (
+    <div className="comparison-list">
+      {reports.map(({ collaborator, comparison }) => {
+        if (!comparison) {
+          return (
+            <article key={collaborator.id} className="comparison-card pending">
+              <strong>{collaborator.displayName}</strong>
+              <span>Waiting for their scan</span>
+            </article>
+          );
+        }
+
+        const issueCount =
+          comparison.missing.length + comparison.versionMismatches.length + comparison.formatMismatches.length;
+
+        return (
+          <article key={collaborator.id} className={`comparison-card ${issueCount === 0 ? "ready" : "issues"}`}>
+            <div>
+              <strong>{collaborator.displayName}</strong>
+              <span>{issueCount === 0 ? "Ready to open together" : `${issueCount} possible issues`}</span>
+            </div>
+            <dl>
+              <div>
+                <dt>Matched</dt>
+                <dd>{comparison.sharedPluginCount}</dd>
+              </div>
+              <div>
+                <dt>Missing</dt>
+                <dd>{comparison.missing.length}</dd>
+              </div>
+              <div>
+                <dt>Versions</dt>
+                <dd>{comparison.versionMismatches.length}</dd>
+              </div>
+              <div>
+                <dt>Formats</dt>
+                <dd>{comparison.formatMismatches.length}</dd>
+              </div>
+            </dl>
+            {issueCount > 0 ? (
+              <details>
+                <summary>View issues</summary>
+                <ul>
+                  {comparison.missing.slice(0, 8).map((issue) => (
+                    <li key={`missing-${issue.pluginName}`}>{issue.pluginName} is missing for {collaborator.displayName}</li>
+                  ))}
+                  {comparison.versionMismatches.slice(0, 6).map((issue) => (
+                    <li key={`version-${issue.pluginName}`}>
+                      {issue.pluginName} version differs: you have {issue.ownerValue}, {collaborator.displayName} has{" "}
+                      {issue.otherValue}
+                    </li>
+                  ))}
+                  {comparison.formatMismatches.slice(0, 6).map((issue) => (
+                    <li key={`format-${issue.pluginName}`}>
+                      {issue.pluginName} format differs: you have {issue.ownerValue}, {collaborator.displayName} has{" "}
+                      {issue.otherValue}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </article>
+        );
+      })}
+    </div>
   );
 }
 

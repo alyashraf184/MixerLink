@@ -79,6 +79,12 @@ button.danger:hover:not(:disabled) {
   color: #ff7a66;
 }
 
+button.compact {
+  font-size: 13px;
+  min-height: 34px;
+  padding: 0 12px;
+}
+
 input {
   border: 1px solid #3b4048;
   border-radius: 8px;
@@ -431,6 +437,71 @@ h1 {
   margin-top: 28px;
 }
 
+.plugin-folder-manager {
+  background: rgba(23, 25, 29, 0.72);
+  border: 1px solid #30343a;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  margin: 18px auto 0;
+  max-width: 680px;
+  padding: 12px;
+  text-align: left;
+}
+
+.plugin-folder-manager > button {
+  justify-self: start;
+}
+
+.plugin-folder-manager p {
+  color: #8f98a4;
+  font-size: 13px;
+  margin: 0;
+}
+
+.plugin-folder-manager ul {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.plugin-folder-manager li {
+  align-items: center;
+  background: #181a1e;
+  border: 1px solid #30343a;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr auto;
+  min-width: 0;
+  padding: 8px;
+}
+
+.plugin-folder-manager li span {
+  color: #c9d0d9;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.remove-folder-button {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px #4c3433;
+  color: #ffb5aa;
+  font-size: 12px;
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.remove-folder-button:hover:not(:disabled) {
+  background: rgba(255, 92, 71, 0.12);
+  box-shadow: inset 0 0 0 1px #ff5c47;
+  color: #ff7a66;
+  transform: none;
+}
+
 .status-panel {
   background: rgba(18, 20, 23, 0.86);
   border: 1px solid #30343a;
@@ -571,6 +642,113 @@ h1 {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.empty-compatibility {
+  color: #8f98a4;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+.comparison-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.comparison-card {
+  background: #181a1e;
+  border: 1px solid #30343a;
+  border-left: 4px solid #ff7a18;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.comparison-card.ready {
+  border-left-color: #8bd450;
+}
+
+.comparison-card.pending {
+  border-left-color: #8f98a4;
+}
+
+.comparison-card.issues {
+  border-left-color: #ffb15f;
+}
+
+.comparison-card > div:first-child {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.comparison-card strong {
+  color: #f7f8fb;
+}
+
+.comparison-card span {
+  color: #c9d0d9;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.comparison-card dl {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.comparison-card dl div {
+  background: #24272c;
+  border: 1px solid #30343a;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.comparison-card dt {
+  color: #8f98a4;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.comparison-card dd {
+  color: #f7f8fb;
+  font-size: 18px;
+  font-weight: 800;
+  margin: 2px 0 0;
+}
+
+.comparison-card details {
+  background: rgba(36, 39, 44, 0.62);
+  border: 1px solid #30343a;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.comparison-card summary {
+  color: #ffb15f;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.comparison-card ul {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.comparison-card li {
+  color: #c9d0d9;
+  font-size: 12px;
+}
+
 .compatibility-card {
   background: #181a1e;
   border: 1px solid #30343a;
@@ -678,6 +856,11 @@ h1 {
   color: #bdf291;
 }
 
+.plugin-pill-list li.custom {
+  box-shadow: inset 0 0 0 1px rgba(255, 177, 95, 0.5);
+  color: #ffcf91;
+}
+
 .plugin-pill-list li.missing {
   box-shadow: inset 0 0 0 1px rgba(255, 92, 71, 0.5);
   color: #ffb5aa;
@@ -729,5 +912,9 @@ h1 {
 
   .session-form {
     grid-template-columns: 1fr;
+  }
+
+  .comparison-card dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

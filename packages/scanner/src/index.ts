@@ -6,6 +6,8 @@ const clientVersion = "0.1.0";
 
 export type ScanCompatibilityOptions = {
   maxPluginsPerFolder?: number;
+  maxDepth?: number;
+  customPluginFolders?: string[];
 };
 
 export function createEmptyCompatibilitySnapshot(): CompatibilitySnapshot {
@@ -16,27 +18,31 @@ export function createEmptyCompatibilitySnapshot(): CompatibilitySnapshot {
 }
 
 export async function scanLocalCompatibility(options: ScanCompatibilityOptions = {}): Promise<CompatibilitySnapshot> {
-  const maxPluginsPerFolder = options.maxPluginsPerFolder ?? 250;
+  const maxPluginsPerFolder = options.maxPluginsPerFolder ?? 1000;
+  const maxDepth = options.maxDepth ?? 4;
   const warnings: string[] = [];
-  const pluginFolders = getPluginSearchFolders();
+  const systemPluginFolders = getPluginSearchFolders();
+  const customPluginFolders = dedupePaths(options.customPluginFolders ?? []);
+  const pluginFolders = [...systemPluginFolders, ...customPluginFolders];
   const detectedPluginFolders: string[] = [];
   const plugins = new Map<string, DetectedPlugin>();
   const daw = await detectFlStudio(warnings);
 
-  const fs = await import("node:fs/promises");
-
   for (const folder of pluginFolders) {
+    const source = customPluginFolders.includes(folder) ? "custom" : "system";
+
     try {
-      const entries = await fs.readdir(folder, { withFileTypes: true });
+      const folderPlugins = await scanPluginFolder(folder, {
+        maxDepth,
+        maxPlugins: maxPluginsPerFolder,
+        source
+      });
       detectedPluginFolders.push(folder);
 
-      for (const entry of entries.slice(0, maxPluginsPerFolder)) {
-        const plugin = detectPluginFromEntry(entry.name, entry.isDirectory());
-        if (plugin) {
-          plugins.set(`${plugin.format}:${plugin.name.toLowerCase()}`, plugin);
-        }
+      for (const plugin of folderPlugins) {
+        plugins.set(`${plugin.format}:${plugin.name.toLowerCase()}:${plugin.path ?? ""}`, plugin);
       }
-    } catch {
+    } catch (error) {
       warnings.push(`Skipped plugin folder: ${folder}`);
     }
   }
@@ -48,9 +54,55 @@ export async function scanLocalCompatibility(options: ScanCompatibilityOptions =
     scan: {
       scannedAt: new Date().toISOString(),
       pluginFolders: detectedPluginFolders,
+      customPluginFolders,
       warnings
     }
   };
+}
+
+type ScanPluginFolderOptions = {
+  maxDepth: number;
+  maxPlugins: number;
+  source: NonNullable<DetectedPlugin["source"]>;
+};
+
+async function scanPluginFolder(rootFolder: string, options: ScanPluginFolderOptions): Promise<DetectedPlugin[]> {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const plugins: DetectedPlugin[] = [];
+
+  async function walk(folder: string, depth: number): Promise<void> {
+    if (depth > options.maxDepth || plugins.length >= options.maxPlugins) {
+      return;
+    }
+
+    const entries = await fs.readdir(folder, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (plugins.length >= options.maxPlugins) {
+        return;
+      }
+
+      const fullPath = path.join(folder, entry.name);
+      const plugin = detectPluginFromEntry(entry.name, entry.isDirectory(), fullPath, options.source);
+
+      if (plugin) {
+        plugins.push(plugin);
+        continue;
+      }
+
+      if (entry.isDirectory() && !isPluginBundleName(entry.name)) {
+        try {
+          await walk(fullPath, depth + 1);
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+
+  await walk(rootFolder, 0);
+  return plugins;
 }
 
 async function detectFlStudio(warnings: string[]): Promise<CompatibilitySnapshot["daw"]> {
@@ -117,31 +169,90 @@ function getPluginSearchFolders(): string[] {
   ];
 }
 
-function detectPluginFromEntry(entryName: string, isDirectory: boolean): DetectedPlugin | undefined {
+function detectPluginFromEntry(
+  entryName: string,
+  isDirectory: boolean,
+  fullPath: string,
+  source: NonNullable<DetectedPlugin["source"]>
+): DetectedPlugin | undefined {
   const lowerName = entryName.toLowerCase();
 
   if (isDirectory && lowerName.endsWith(".vst3")) {
-    return createPlugin(entryName, "vst3");
+    return createPlugin(entryName, "vst3", fullPath, source);
   }
 
   if (isDirectory && lowerName.endsWith(".clap")) {
-    return createPlugin(entryName, "clap");
+    return createPlugin(entryName, "clap", fullPath, source);
   }
 
   if (!isDirectory && lowerName.endsWith(".dll")) {
-    return createPlugin(entryName, "vst2");
+    return createPlugin(entryName, "vst2", fullPath, source);
   }
 
   return undefined;
 }
 
-function createPlugin(fileName: string, format: DetectedPlugin["format"]): DetectedPlugin {
+function createPlugin(
+  fileName: string,
+  format: DetectedPlugin["format"],
+  fullPath: string,
+  source: NonNullable<DetectedPlugin["source"]>
+): DetectedPlugin {
+  const name = stripPluginExtension(fileName);
+
   return {
-    name: stripPluginExtension(fileName),
-    format
+    name: stripVersionSuffix(name),
+    vendor: inferVendorFromPath(fullPath),
+    version: inferVersionFromName(name),
+    format,
+    path: fullPath,
+    source
   };
 }
 
 function stripPluginExtension(fileName: string): string {
   return fileName.replace(/\.(vst3|clap|dll)$/i, "");
+}
+
+function stripVersionSuffix(name: string): string {
+  return name.replace(/\s+(v|version)?\d+(?:\.\d+){1,3}$/i, "").trim();
+}
+
+function inferVersionFromName(name: string): string | undefined {
+  const match = name.match(/\b(?:v|version)?(\d+(?:\.\d+){1,3})\b/i);
+  return match?.[1];
+}
+
+function inferVendorFromPath(pluginPath: string): string | undefined {
+  const parts = pluginPath.split(/[\\/]+/).filter(Boolean);
+  const pluginFile = parts.at(-1);
+  const parent = parts.at(-2);
+
+  if (!parent || !pluginFile) {
+    return undefined;
+  }
+
+  const genericFolders = new Set(["vst3", "vstplugins", "vst2", "clap", "common files", "steinberg"]);
+  return genericFolders.has(parent.toLowerCase()) ? undefined : parent;
+}
+
+function isPluginBundleName(name: string): boolean {
+  return /\.(vst3|clap)$/i.test(name);
+}
+
+function dedupePaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const folder of paths) {
+    const normalized = folder.trim();
+    const key = normalized.toLowerCase();
+
+    if (normalized && !seen.has(key)) {
+      seen.add(key);
+      result.push(normalized);
+    }
+  }
+
+  return result;
 }
