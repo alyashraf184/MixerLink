@@ -15,6 +15,26 @@ function spawnProcess(command, args, options = {}) {
   return child;
 }
 
+function runCommand(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      shell: true,
+      stdio: "inherit",
+      ...options
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(`${command} ${args.join(" ")} exited with code ${code}`));
+    });
+  });
+}
+
 function waitForPort(port, host = "127.0.0.1") {
   return new Promise((resolve) => {
     const tryConnect = () => {
@@ -47,13 +67,21 @@ process.on("SIGTERM", () => {
   process.exit(0);
 });
 
-spawnProcess("npm.cmd", ["run", "dev", "--", "--host", "127.0.0.1", "--port", String(vitePort)]);
+(async () => {
+  try {
+    await runCommand("npm.cmd", ["run", "build", "--workspace", "@mixerlink/scanner"]);
+    spawnProcess("npm.cmd", ["run", "dev", "--", "--host", "127.0.0.1", "--port", String(vitePort)]);
 
-waitForPort(vitePort).then(() => {
-  spawnProcess("electron.cmd", ["."], {
-    env: {
-      ...process.env,
-      MIXERLINK_DEV_SERVER_URL: devServerUrl
-    }
-  });
-});
+    await waitForPort(vitePort);
+    spawnProcess("electron.cmd", ["."], {
+      env: {
+        ...process.env,
+        MIXERLINK_DEV_SERVER_URL: devServerUrl
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    shutdown();
+    process.exit(1);
+  }
+})();
