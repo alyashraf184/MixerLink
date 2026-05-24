@@ -48,6 +48,7 @@ function App() {
   const [displayName, setDisplayName] = useState(() => localStorage.getItem("mixerlink.displayName") ?? "Producer");
   const [relayUrl, setRelayUrl] = useState(() => localStorage.getItem("mixerlink.relayUrl") ?? defaultRelayUrl);
   const [relayInput, setRelayInput] = useState(relayUrl);
+  const [localRelayUrls, setLocalRelayUrls] = useState<string[]>([defaultRelayUrl]);
   const [joinCode, setJoinCode] = useState("");
   const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "offline">("connecting");
   const [session, setSession] = useState<SessionState | null>(null);
@@ -144,18 +145,21 @@ function App() {
     }
 
     Promise.all([
+      window.mixerlink.getLocalRelayUrls(),
       window.mixerlink.getCustomFlStudioFolders(),
       window.mixerlink.getUserDataFolders(),
       window.mixerlink.getProjectFolders(),
       window.mixerlink.getCustomPluginFolders()
     ])
-      .then(([nextFlStudioFolders, nextUserDataFolders, nextProjectFolders, nextPluginFolders]) => {
+      .then(([nextLocalRelayUrls, nextFlStudioFolders, nextUserDataFolders, nextProjectFolders, nextPluginFolders]) => {
+        setLocalRelayUrls(nextLocalRelayUrls);
         setCustomFlStudioFolders(nextFlStudioFolders);
         setUserDataFolders(nextUserDataFolders);
         setProjectFolders(nextProjectFolders);
         setCustomPluginFolders(nextPluginFolders);
       })
       .catch(() => {
+        setLocalRelayUrls([defaultRelayUrl]);
         setCustomFlStudioFolders([]);
         setUserDataFolders([]);
         setProjectFolders([]);
@@ -228,6 +232,11 @@ function App() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Relay address is not valid.");
     }
+  }
+
+  async function copyRelayUrl(url: string) {
+    await navigator.clipboard.writeText(url);
+    setNotice(`Copied ${url}. Share this with your collaborator if you are hosting.`);
   }
 
   function createSession() {
@@ -434,6 +443,28 @@ function App() {
                 </button>
               </span>
             </label>
+            {localRelayUrls.length > 0 ? (
+              <div className="relay-address-list">
+                <span>Your relay addresses</span>
+                <div>
+                  {localRelayUrls.map((url) => (
+                    <button
+                      type="button"
+                      className={url === relayUrl ? "active" : ""}
+                      key={url}
+                      onClick={() => {
+                        setRelayInput(url);
+                        setRelayUrl(url);
+                      }}
+                      onDoubleClick={() => copyRelayUrl(url)}
+                      title="Click to use this relay. Double-click to copy it."
+                    >
+                      {url}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {(sessionMode === "join" || session) ? (
               <label>
                 Session code

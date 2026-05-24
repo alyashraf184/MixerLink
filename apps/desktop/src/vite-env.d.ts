@@ -6,6 +6,7 @@ declare global {
   interface Window {
     mixerlink?: {
       scanCompatibility: () => Promise<CompatibilitySnapshot>;
+      getLocalRelayUrls: () => Promise<string[]>;
       getCustomFlStudioFolders: () => Promise<string[]>;
       addCustomFlStudioFolder: () => Promise<string[]>;
       removeCustomFlStudioFolder: (folder: string) => Promise<string[]>;

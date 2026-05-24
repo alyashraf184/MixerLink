@@ -375,6 +375,43 @@ h1 {
   min-height: 44px;
 }
 
+.relay-address-list {
+  display: grid;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+
+.relay-address-list > span {
+  color: #8f98a4;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.relay-address-list > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.relay-address-list button {
+  background: #181a1e;
+  box-shadow: inset 0 0 0 1px #30343a;
+  color: #c9d0d9;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.relay-address-list button.active,
+.relay-address-list button:hover:not(:disabled) {
+  background: #24272c;
+  box-shadow: inset 0 0 0 1px #8bd450;
+  color: #bdf291;
+  transform: none;
+}
+
 .session-form:has(.code-input-row) .code-input-row {
   animation: room-code-reveal 320ms ease both;
 }

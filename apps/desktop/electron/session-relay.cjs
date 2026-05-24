@@ -5,7 +5,7 @@ const rooms = new Map();
 const socketRooms = new Map();
 
 function startSessionRelay(port) {
-  const relay = new WebSocketServer({ port });
+  const relay = new WebSocketServer({ host: "0.0.0.0", port });
 
   relay.on("connection", (socket) => {
     send(socket, {
@@ -33,7 +33,7 @@ function startSessionRelay(port) {
   });
 
   relay.on("listening", () => {
-    console.log(`MixerLink embedded relay listening on ws://localhost:${port}`);
+    console.log(`MixerLink embedded relay listening on ws://0.0.0.0:${port}`);
   });
 
   relay.on("error", (error) => {

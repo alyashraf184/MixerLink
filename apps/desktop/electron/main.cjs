@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const fs = require("node:fs/promises");
+const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { startSessionRelay } = require("./session-relay.cjs");
@@ -54,6 +55,21 @@ function getScannerModulePath() {
   }
 
   return path.join(__dirname, "..", "..", "..", "packages", "scanner", "dist", "index.js");
+}
+
+function getLocalRelayUrls() {
+  const urls = ["ws://localhost:4317"];
+  const interfaces = os.networkInterfaces();
+
+  for (const networkInterface of Object.values(interfaces)) {
+    for (const address of networkInterface ?? []) {
+      if (address.family === "IPv4" && !address.internal) {
+        urls.push(`ws://${address.address}:4317`);
+      }
+    }
+  }
+
+  return Array.from(new Set(urls));
 }
 
 async function scanCompatibility() {
@@ -187,6 +203,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   ipcMain.handle("compatibility:scan", scanCompatibility);
+  ipcMain.handle("relay-urls:get", getLocalRelayUrls);
   ipcMain.handle("fl-studio-folders:get", getCustomFlStudioFolders);
   ipcMain.handle("fl-studio-folders:add", addCustomFlStudioFolder);
   ipcMain.handle("fl-studio-folders:remove", removeCustomFlStudioFolder);
