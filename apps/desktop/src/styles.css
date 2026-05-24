@@ -365,6 +365,16 @@ h1 {
   transform-origin: center;
 }
 
+.relay-input-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.relay-input-row button {
+  min-height: 44px;
+}
+
 .session-form:has(.code-input-row) .code-input-row {
   animation: room-code-reveal 320ms ease both;
 }
@@ -437,29 +447,52 @@ h1 {
   margin-top: 28px;
 }
 
-.plugin-folder-manager {
+.folder-manager {
   background: rgba(23, 25, 29, 0.72);
   border: 1px solid #30343a;
   border-radius: 8px;
   display: grid;
-  gap: 10px;
+  gap: 14px;
   margin: 18px auto 0;
   max-width: 680px;
   padding: 12px;
   text-align: left;
 }
 
-.plugin-folder-manager > button {
-  justify-self: start;
+.folder-picker {
+  border-top: 1px solid #30343a;
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
 }
 
-.plugin-folder-manager p {
+.folder-picker:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.folder-picker-heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.folder-picker-heading h2 {
+  color: #f7f8fb;
+  font-size: 13px;
+  line-height: 1.2;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.folder-picker p {
   color: #8f98a4;
   font-size: 13px;
   margin: 0;
 }
 
-.plugin-folder-manager ul {
+.folder-picker ul {
   display: grid;
   gap: 8px;
   list-style: none;
@@ -467,7 +500,7 @@ h1 {
   padding: 0;
 }
 
-.plugin-folder-manager li {
+.folder-picker li {
   align-items: center;
   background: #181a1e;
   border: 1px solid #30343a;
@@ -479,7 +512,7 @@ h1 {
   padding: 8px;
 }
 
-.plugin-folder-manager li span {
+.folder-picker li span {
   color: #c9d0d9;
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 11px;

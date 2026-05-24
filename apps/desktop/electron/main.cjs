@@ -18,6 +18,9 @@ async function readSettings() {
     return JSON.parse(raw);
   } catch {
     return {
+      customFlStudioFolders: [],
+      userDataFolders: [],
+      projectFolders: [],
       customPluginFolders: []
     };
   }
@@ -58,6 +61,9 @@ async function scanCompatibility() {
     const scanner = await import(pathToFileURL(getScannerModulePath()).href);
     const settings = await readSettings();
     return scanner.scanLocalCompatibility({
+      customFlStudioFolders: settings.customFlStudioFolders,
+      userDataFolders: settings.userDataFolders,
+      projectFolders: settings.projectFolders,
       customPluginFolders: settings.customPluginFolders
     });
   } catch (error) {
@@ -66,40 +72,88 @@ async function scanCompatibility() {
   }
 }
 
-async function getCustomPluginFolders() {
+async function getFolders(settingsKey) {
   const settings = await readSettings();
-  return normalizeFolders(settings.customPluginFolders ?? []);
+  return normalizeFolders(settings[settingsKey] ?? []);
 }
 
-async function addCustomPluginFolder() {
+async function addFolder(settingsKey, title) {
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: "Add plugin folder",
+    title,
     properties: ["openDirectory"]
   });
 
   if (result.canceled || result.filePaths.length === 0) {
-    return getCustomPluginFolders();
+    return getFolders(settingsKey);
   }
 
   const settings = await readSettings();
-  const customPluginFolders = normalizeFolders([...(settings.customPluginFolders ?? []), result.filePaths[0]]);
+  const folders = normalizeFolders([...(settings[settingsKey] ?? []), result.filePaths[0]]);
   await writeSettings({
     ...settings,
-    customPluginFolders
+    [settingsKey]: folders
   });
-  return customPluginFolders;
+  return folders;
 }
 
-async function removeCustomPluginFolder(_event, folderToRemove) {
+async function removeFolder(settingsKey, folderToRemove) {
   const settings = await readSettings();
-  const customPluginFolders = normalizeFolders(settings.customPluginFolders ?? []).filter(
+  const folders = normalizeFolders(settings[settingsKey] ?? []).filter(
     (folder) => folder.toLowerCase() !== String(folderToRemove).toLowerCase()
   );
   await writeSettings({
     ...settings,
-    customPluginFolders
+    [settingsKey]: folders
   });
-  return customPluginFolders;
+  return folders;
+}
+
+function getCustomFlStudioFolders() {
+  return getFolders("customFlStudioFolders");
+}
+
+function addCustomFlStudioFolder() {
+  return addFolder("customFlStudioFolders", "Add FL Studio install folder");
+}
+
+function removeCustomFlStudioFolder(_event, folderToRemove) {
+  return removeFolder("customFlStudioFolders", folderToRemove);
+}
+
+function getUserDataFolders() {
+  return getFolders("userDataFolders");
+}
+
+function addUserDataFolder() {
+  return addFolder("userDataFolders", "Add FL Studio user data folder");
+}
+
+function removeUserDataFolder(_event, folderToRemove) {
+  return removeFolder("userDataFolders", folderToRemove);
+}
+
+function getProjectFolders() {
+  return getFolders("projectFolders");
+}
+
+function addProjectFolder() {
+  return addFolder("projectFolders", "Add project folder");
+}
+
+function removeProjectFolder(_event, folderToRemove) {
+  return removeFolder("projectFolders", folderToRemove);
+}
+
+async function getCustomPluginFolders() {
+  return getFolders("customPluginFolders");
+}
+
+async function addCustomPluginFolder() {
+  return addFolder("customPluginFolders", "Add plugin folder");
+}
+
+async function removeCustomPluginFolder(_event, folderToRemove) {
+  return removeFolder("customPluginFolders", folderToRemove);
 }
 
 function createWindow() {
@@ -133,6 +187,15 @@ function createWindow() {
 
 app.whenReady().then(() => {
   ipcMain.handle("compatibility:scan", scanCompatibility);
+  ipcMain.handle("fl-studio-folders:get", getCustomFlStudioFolders);
+  ipcMain.handle("fl-studio-folders:add", addCustomFlStudioFolder);
+  ipcMain.handle("fl-studio-folders:remove", removeCustomFlStudioFolder);
+  ipcMain.handle("user-data-folders:get", getUserDataFolders);
+  ipcMain.handle("user-data-folders:add", addUserDataFolder);
+  ipcMain.handle("user-data-folders:remove", removeUserDataFolder);
+  ipcMain.handle("project-folders:get", getProjectFolders);
+  ipcMain.handle("project-folders:add", addProjectFolder);
+  ipcMain.handle("project-folders:remove", removeProjectFolder);
   ipcMain.handle("plugin-folders:get", getCustomPluginFolders);
   ipcMain.handle("plugin-folders:add", addCustomPluginFolder);
   ipcMain.handle("plugin-folders:remove", removeCustomPluginFolder);

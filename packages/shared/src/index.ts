@@ -14,6 +14,12 @@ export type CompatibilitySnapshot = {
     version?: string;
     path?: string;
   };
+  projectFiles?: Array<{
+    name: string;
+    path: string;
+    type: "project" | "archive" | "preset" | "audio" | "midi";
+    source?: "project" | "user-data";
+  }>;
   plugins: Array<{
     name: string;
     vendor?: string;
@@ -29,6 +35,10 @@ export type CompatibilitySnapshot = {
   }>;
   scan?: {
     scannedAt: string;
+    flStudioFolders: string[];
+    customFlStudioFolders: string[];
+    userDataFolders: string[];
+    projectFolders: string[];
     pluginFolders: string[];
     customPluginFolders: string[];
     warnings: string[];
