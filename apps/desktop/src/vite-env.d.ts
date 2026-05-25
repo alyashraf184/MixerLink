@@ -15,6 +15,8 @@ declare global {
         installPath: string;
         legacyInstalled?: boolean;
         legacyInstallPath?: string;
+        commandPath?: string;
+        runtimePath?: string;
         bridgeUrl: string;
         runtime?: {
           connected: boolean;
@@ -29,6 +31,8 @@ declare global {
         installPath: string;
         legacyInstalled?: boolean;
         legacyInstallPath?: string;
+        commandPath?: string;
+        runtimePath?: string;
         bridgeUrl: string;
         runtime?: {
           connected: boolean;

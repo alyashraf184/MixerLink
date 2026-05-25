@@ -17,6 +17,8 @@ type FlBridgeStatus = {
   installPath: string;
   legacyInstalled?: boolean;
   legacyInstallPath?: string;
+  commandPath?: string;
+  runtimePath?: string;
   bridgeUrl: string;
   runtime?: FlBridgeRuntime;
 };

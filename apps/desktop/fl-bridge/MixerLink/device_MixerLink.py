@@ -2,6 +2,7 @@
 # url=https://github.com/alyashraf184/MixerLink
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -11,6 +12,16 @@ import transport
 import ui
 
 BRIDGE_URL = "http://127.0.0.1:4318"
+BRIDGE_DIR = os.path.join(
+    os.path.expanduser("~"),
+    "Documents",
+    "Image-Line",
+    "FL Studio",
+    "Settings",
+    "MixerLink",
+)
+COMMANDS_PATH = os.path.join(BRIDGE_DIR, "commands.json")
+RUNTIME_PATH = os.path.join(BRIDGE_DIR, "runtime.json")
 POLL_INTERVAL_SECONDS = 0.2
 POST_INTERVAL_SECONDS = 0.25
 HTTP_TIMEOUT_SECONDS = 0.35
@@ -45,6 +56,28 @@ def _safe_request(method, path, payload=None):
         return None
 
 
+def _read_json_file(file_path):
+    try:
+        with open(file_path, "r") as file:
+            return json.load(file)
+    except (IOError, OSError, ValueError):
+        return None
+
+
+def _write_json_file(file_path, payload):
+    try:
+        if not os.path.isdir(BRIDGE_DIR):
+            os.makedirs(BRIDGE_DIR)
+
+        temp_path = file_path + ".tmp"
+        with open(temp_path, "w") as file:
+            json.dump(payload, file)
+        os.replace(temp_path, file_path)
+        return True
+    except (IOError, OSError, ValueError):
+        return False
+
+
 def _current_state():
     return {
         "playing": bool(transport.isPlaying()),
@@ -70,6 +103,7 @@ def _send_hello(force=False):
             "tempoBpm": state["tempoBpm"],
         },
     )
+    _write_runtime_state()
 
 
 def _apply_operation(operation):
@@ -103,6 +137,9 @@ def _poll_mixerlink():
 
     payload = _safe_request("GET", "/events?after=%s" % last_event_id)
     if not payload:
+        payload = _read_json_file(COMMANDS_PATH)
+
+    if not payload:
         return
 
     for event in payload.get("events", []):
@@ -117,12 +154,37 @@ def _poll_mixerlink():
 
 
 def _post_operation(operation):
-    _safe_request("POST", "/operation", {"operation": operation})
+    if not _safe_request("POST", "/operation", {"operation": operation}):
+        _write_json_file(
+            os.path.join(BRIDGE_DIR, "last-local-operation.json"),
+            {
+                "operation": operation,
+                "createdAt": time.time(),
+            },
+        )
+
+
+def _write_runtime_state():
+    state = _current_state()
+    _write_json_file(
+        RUNTIME_PATH,
+        {
+            "script": "MixerLink Bridge",
+            "playing": state["playing"],
+            "tempoBpm": state["tempoBpm"],
+            "lastSeenAt": _iso_now(),
+        },
+    )
 
 
 def _post_state():
     state = _current_state()
+    _write_runtime_state()
     _safe_request("POST", "/fl/state", state)
+
+
+def _iso_now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def _detect_local_changes():

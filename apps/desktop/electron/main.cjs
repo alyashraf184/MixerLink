@@ -86,6 +86,18 @@ function getFlBridgeInstallPath() {
   return path.join(getFlBridgeInstallFolder(), flBridgeScriptName);
 }
 
+function getFlBridgeDataFolder() {
+  return path.join(app.getPath("documents"), "Image-Line", "FL Studio", "Settings", "MixerLink");
+}
+
+function getFlBridgeCommandsPath() {
+  return path.join(getFlBridgeDataFolder(), "commands.json");
+}
+
+function getFlBridgeRuntimePath() {
+  return path.join(getFlBridgeDataFolder(), "runtime.json");
+}
+
 function getLegacyFlBridgeInstallPath() {
   return path.join(
     app.getPath("documents"),
@@ -107,8 +119,10 @@ async function getFlBridgeStatus() {
     installPath,
     legacyInstalled: await pathExists(legacyInstallPath),
     legacyInstallPath,
+    commandPath: getFlBridgeCommandsPath(),
+    runtimePath: getFlBridgeRuntimePath(),
     bridgeUrl: "http://127.0.0.1:4318",
-    runtime: getFlBridgeRuntime()
+    runtime: await refreshFlBridgeRuntimeFromFile()
   };
 }
 
@@ -133,8 +147,10 @@ async function installFlBridgeScript() {
     installPath,
     legacyInstalled: false,
     legacyInstallPath,
+    commandPath: getFlBridgeCommandsPath(),
+    runtimePath: getFlBridgeRuntimePath(),
     bridgeUrl: "http://127.0.0.1:4318",
-    runtime: getFlBridgeRuntime()
+    runtime: await refreshFlBridgeRuntimeFromFile()
   };
 }
 
@@ -148,10 +164,35 @@ function getFlBridgeRuntime() {
   };
 }
 
+async function refreshFlBridgeRuntimeFromFile() {
+  try {
+    const raw = await fs.readFile(getFlBridgeRuntimePath(), "utf-8");
+    const payload = JSON.parse(raw);
+
+    if (payload && typeof payload === "object") {
+      updateFlBridgeRuntime({
+        script: payload.script,
+        playing: payload.playing,
+        tempoBpm: payload.tempoBpm,
+        lastSeenAt: payload.lastSeenAt
+      });
+    }
+  } catch {
+    // The runtime file only exists after FL Studio has loaded the bridge script.
+  }
+
+  return getFlBridgeRuntime();
+}
+
 function updateFlBridgeRuntime(payload) {
+  const lastSeenAt =
+    typeof payload.lastSeenAt === "string" && !Number.isNaN(Date.parse(payload.lastSeenAt))
+      ? payload.lastSeenAt
+      : new Date().toISOString();
+
   flBridgeRuntime = {
     connected: true,
-    lastSeenAt: new Date().toISOString(),
+    lastSeenAt,
     playing: typeof payload.playing === "boolean" ? payload.playing : flBridgeRuntime.playing,
     tempoBpm: Number.isFinite(Number(payload.tempoBpm)) ? Math.round(Number(payload.tempoBpm) * 10) / 10 : flBridgeRuntime.tempoBpm,
     script: typeof payload.script === "string" ? payload.script : flBridgeRuntime.script
@@ -159,6 +200,13 @@ function updateFlBridgeRuntime(payload) {
 
   mainWindow?.webContents.send("fl-bridge:runtime", getFlBridgeRuntime());
   return getFlBridgeRuntime();
+}
+
+async function writeJsonFile(filePath, payload) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp`;
+  await fs.writeFile(tempPath, JSON.stringify(payload, null, 2));
+  await fs.rename(tempPath, filePath);
 }
 
 function getLocalRelayUrls() {
@@ -198,7 +246,7 @@ function isBridgeOperation(operation) {
   return operation.type === "tempo.changed" && Number.isFinite(Number(operation.payload?.bpm));
 }
 
-function enqueueBridgeOperation(operation, source = "session") {
+async function enqueueBridgeOperation(operation, source = "session") {
   if (!isBridgeOperation(operation)) {
     throw new Error("Bridge operation was not valid.");
   }
@@ -214,6 +262,12 @@ function enqueueBridgeOperation(operation, source = "session") {
   while (bridgeEvents.length > 200) {
     bridgeEvents.shift();
   }
+
+  await writeJsonFile(getFlBridgeCommandsPath(), {
+    app: "MixerLink",
+    latestSequence: bridgeSequence,
+    events: bridgeEvents
+  });
 
   return { ok: true, id: bridgeSequence };
 }
@@ -551,7 +605,7 @@ app.whenReady().then(() => {
   ipcMain.handle("bridge:queue-operation", (_event, operation) => enqueueBridgeOperation(operation));
   ipcMain.handle("fl-bridge:status", getFlBridgeStatus);
   ipcMain.handle("fl-bridge:install", installFlBridgeScript);
-  ipcMain.handle("fl-bridge:runtime", getFlBridgeRuntime);
+  ipcMain.handle("fl-bridge:runtime", refreshFlBridgeRuntimeFromFile);
   ipcMain.handle("relay-urls:get", getLocalRelayUrls);
   ipcMain.handle("fl-studio-folders:get", getCustomFlStudioFolders);
   ipcMain.handle("fl-studio-folders:add", addCustomFlStudioFolder);
