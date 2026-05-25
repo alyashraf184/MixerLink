@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { ClientMessage, ServerMessage } from "@mixerlink/protocol";
 import {
   compareCompatibilitySnapshots,
+  type BridgeOperation,
   type CompatibilityComparison,
   type CompatibilitySnapshot,
   type SessionState
@@ -53,6 +54,7 @@ const mockCompatibilitySnapshot: CompatibilitySnapshot = {
 
 function App() {
   const socketRef = useRef<WebSocket | null>(null);
+  const appliedBridgeOperationRef = useRef<string | null>(null);
   const [sessionMode, setSessionMode] = useState<"start" | "join">("start");
   const [displayName, setDisplayName] = useState(() => localStorage.getItem("mixerlink.displayName") ?? "Producer");
   const [relayUrl, setRelayUrl] = useState(() => localStorage.getItem("mixerlink.relayUrl") ?? defaultRelayUrl);
@@ -71,6 +73,7 @@ function App() {
   const [projectFolders, setProjectFolders] = useState<string[]>([]);
   const [customPluginFolders, setCustomPluginFolders] = useState<string[]>([]);
   const [localSnapshot, setLocalSnapshot] = useState<CompatibilitySnapshot | null>(null);
+  const [bridgeTempoInput, setBridgeTempoInput] = useState("120");
 
   useEffect(() => {
     let isCurrentSocket = true;
@@ -157,6 +160,12 @@ function App() {
   }, [relayUrl]);
 
   useEffect(() => {
+    if (session?.bridge.tempoBpm) {
+      setBridgeTempoInput(String(session.bridge.tempoBpm));
+    }
+  }, [session?.bridge.tempoBpm]);
+
+  useEffect(() => {
     if (!window.mixerlink) {
       return;
     }
@@ -184,9 +193,47 @@ function App() {
       });
   }, []);
 
+  useEffect(() => {
+    if (!window.mixerlink?.onBridgeOperationFromFl) {
+      return;
+    }
+
+    return window.mixerlink.onBridgeOperationFromFl((operation) => {
+      if (socketRef.current?.readyState !== WebSocket.OPEN) {
+        setNotice("FL Studio sent a bridge operation, but no MixerLink room is connected.");
+        return;
+      }
+
+      socketRef.current.send(
+        JSON.stringify({
+          type: "bridge.operation",
+          payload: operation
+        } satisfies ClientMessage)
+      );
+      setNotice(`FL Studio sent ${operation.type} to the room.`);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!session?.bridge.lastOperation || session.bridge.lastOperation.collaboratorId === ownCollaboratorId) {
+      return;
+    }
+
+    const operation = createBridgeOperationFromState(session);
+    const operationKey = `${session.bridge.lastOperation.createdAt}:${session.bridge.lastOperation.type}`;
+
+    if (!operation || appliedBridgeOperationRef.current === operationKey) {
+      return;
+    }
+
+    appliedBridgeOperationRef.current = operationKey;
+    queueBridgeOperationForFl(operation);
+  }, [ownCollaboratorId, session]);
+
   const canSend = connectionStatus === "connected";
   const collaboratorCount = useMemo(() => session?.collaborators.length ?? 0, [session]);
   const hasSharedCompatibility = Boolean(ownCollaboratorId && session?.compatibility[ownCollaboratorId]);
+  const bridgeState = session?.bridge ?? { transport: "stopped" as const, tempoBpm: 120 };
   const compatibilityReports = useMemo(() => {
     if (!session || !ownCollaboratorId) {
       return [];
@@ -274,6 +321,36 @@ function App() {
         code: joinCode,
         displayName
       }
+    });
+  }
+
+  function sendBridgeOperation(operation: BridgeOperation) {
+    send({
+      type: "bridge.operation",
+      payload: operation
+    });
+    queueBridgeOperationForFl(operation);
+  }
+
+  async function queueBridgeOperationForFl(operation: BridgeOperation) {
+    try {
+      await window.mixerlink?.queueBridgeOperation(operation);
+    } catch {
+      setNotice("MixerLink could not queue that operation for the local FL bridge.");
+    }
+  }
+
+  function syncTempo() {
+    const bpm = Math.round(Number(bridgeTempoInput) * 10) / 10;
+
+    if (!Number.isFinite(bpm) || bpm < 20 || bpm > 300) {
+      setNotice("Tempo must be between 20 and 300 BPM.");
+      return;
+    }
+
+    sendBridgeOperation({
+      type: "tempo.changed",
+      payload: { bpm }
     });
   }
 
@@ -469,18 +546,16 @@ function App() {
 
   return (
     <main className="app-shell">
-      <div className="starfield" aria-hidden="true">
-        <span className="stars stars-small" />
-        <span className="stars stars-medium" />
-        <span className="stars stars-large" />
-      </div>
       <header className="app-header">
         <div className="top-line">
           <div>
             <p className="eyebrow">MixerLink</p>
-            <h1>Live collaboration for FL Studio sessions.</h1>
+            <h1>Session control for FL Studio collaboration</h1>
           </div>
-          <span className={`connection-pill ${connectionStatus}`}>{connectionStatus}</span>
+          <div className="header-status">
+            <span className={`connection-pill ${connectionStatus}`}>{connectionStatus}</span>
+            <span>{session ? `Room ${session.code}` : "No active room"}</span>
+          </div>
         </div>
       </header>
       <div className="dashboard-grid">
@@ -625,10 +700,10 @@ function App() {
       </section>
       <section className={`status-panel ${session ? "session-live" : ""}`}>
         <div className="panel-heading">
-          <h2>{session ? `Session ${session.code}` : "Session Foundation"}</h2>
+          <h2>{session ? `Session ${session.code}` : "Workspace"}</h2>
           <span>{collaboratorCount} connected</span>
         </div>
-        <p>{notice}</p>
+        <p className="notice-line">{notice}</p>
         <LocalIntegrationPanel
           snapshot={localSnapshot}
           isScanning={isScanningCompatibility}
@@ -636,6 +711,15 @@ function App() {
           onLaunchFlStudio={launchFlStudio}
           onOpenProject={openProject}
           onRevealPath={revealPath}
+        />
+        <BridgeControlPanel
+          canSend={canSend && Boolean(session)}
+          bridgeState={bridgeState}
+          tempoInput={bridgeTempoInput}
+          onTempoInputChange={setBridgeTempoInput}
+          onPlay={() => sendBridgeOperation({ type: "transport.play" })}
+          onStop={() => sendBridgeOperation({ type: "transport.stop" })}
+          onSyncTempo={syncTempo}
         />
         {session ? (
           <div className="session-grid">
@@ -829,6 +913,91 @@ function App() {
       </aside>
       </div>
     </main>
+  );
+}
+
+function createBridgeOperationFromState(session: SessionState): BridgeOperation | undefined {
+  switch (session.bridge.lastOperation?.type) {
+    case "transport.play":
+      return { type: "transport.play" };
+    case "transport.stop":
+      return { type: "transport.stop" };
+    case "tempo.changed":
+      return {
+        type: "tempo.changed",
+        payload: {
+          bpm: session.bridge.tempoBpm
+        }
+      };
+    default:
+      return undefined;
+  }
+}
+
+function BridgeControlPanel({
+  canSend,
+  bridgeState,
+  tempoInput,
+  onTempoInputChange,
+  onPlay,
+  onStop,
+  onSyncTempo
+}: {
+  canSend: boolean;
+  bridgeState: SessionState["bridge"];
+  tempoInput: string;
+  onTempoInputChange: (value: string) => void;
+  onPlay: () => void;
+  onStop: () => void;
+  onSyncTempo: () => void;
+}) {
+  return (
+    <section className="bridge-panel">
+      <div className="section-heading">
+        <h3>Bridge Sync</h3>
+        <span>{bridgeState.transport}</span>
+      </div>
+      <div className="transport-strip">
+        <button type="button" disabled={!canSend} onClick={onPlay}>
+          Play
+        </button>
+        <button type="button" className="secondary" disabled={!canSend} onClick={onStop}>
+          Stop
+        </button>
+        <label>
+          Tempo
+          <span>
+            <input
+              inputMode="decimal"
+              value={tempoInput}
+              onChange={(event) => onTempoInputChange(event.target.value.replace(/[^\d.]/g, "").slice(0, 6))}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  onSyncTempo();
+                }
+              }}
+            />
+            <button type="button" className="secondary" disabled={!canSend} onClick={onSyncTempo}>
+              Sync
+            </button>
+          </span>
+        </label>
+      </div>
+      <dl className="bridge-metrics">
+        <div>
+          <dt>Transport</dt>
+          <dd>{bridgeState.transport}</dd>
+        </div>
+        <div>
+          <dt>Tempo</dt>
+          <dd>{bridgeState.tempoBpm} BPM</dd>
+        </div>
+        <div>
+          <dt>Bridge</dt>
+          <dd>{canSend ? "Room relay" : "Waiting"}</dd>
+        </div>
+      </dl>
+    </section>
   );
 }
 

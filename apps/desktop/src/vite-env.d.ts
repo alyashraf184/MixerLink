@@ -9,6 +9,10 @@ declare global {
       launchFlStudio: (executablePath?: string) => Promise<{ ok: true }>;
       openProjectInFlStudio: (request: { projectPath: string; executablePath?: string }) => Promise<{ ok: true }>;
       revealPath: (targetPath: string) => Promise<{ ok: true }>;
+      queueBridgeOperation: (operation: import("@mixerlink/shared").BridgeOperation) => Promise<{ ok: true; id: number }>;
+      onBridgeOperationFromFl: (
+        callback: (operation: import("@mixerlink/shared").BridgeOperation) => void
+      ) => () => void;
       getLocalRelayUrls: () => Promise<string[]>;
       getCustomFlStudioFolders: () => Promise<string[]>;
       addCustomFlStudioFolder: () => Promise<string[]>;

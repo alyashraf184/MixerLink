@@ -1,14 +1,19 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs/promises");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
-const { pathToFileURL } = require("node:url");
-const { startSessionRelay } = require("./session-relay.cjs");
+const { pathToFileURL, URL } = require("node:url");
 
 const isDev = Boolean(process.env.MIXERLINK_DEV_SERVER_URL);
 let sessionRelay;
+let flBridgeServer;
 let mainWindow;
+let bridgeSequence = 0;
+const bridgeEvents = [];
+
+const { startSessionRelay } = require("./session-relay.cjs");
 
 function getSettingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
@@ -71,6 +76,144 @@ function getLocalRelayUrls() {
   }
 
   return Array.from(new Set(urls));
+}
+
+function writeJson(response, statusCode, payload) {
+  response.writeHead(statusCode, {
+    "content-type": "application/json; charset=utf-8",
+    "access-control-allow-origin": "http://localhost",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type"
+  });
+  response.end(JSON.stringify(payload));
+}
+
+function isBridgeOperation(operation) {
+  if (!operation || typeof operation !== "object" || typeof operation.type !== "string") {
+    return false;
+  }
+
+  if (operation.type === "transport.play" || operation.type === "transport.stop") {
+    return true;
+  }
+
+  return operation.type === "tempo.changed" && Number.isFinite(Number(operation.payload?.bpm));
+}
+
+function enqueueBridgeOperation(operation, source = "session") {
+  if (!isBridgeOperation(operation)) {
+    throw new Error("Bridge operation was not valid.");
+  }
+
+  bridgeSequence += 1;
+  bridgeEvents.push({
+    id: bridgeSequence,
+    source,
+    operation,
+    createdAt: new Date().toISOString()
+  });
+
+  while (bridgeEvents.length > 200) {
+    bridgeEvents.shift();
+  }
+
+  return { ok: true, id: bridgeSequence };
+}
+
+function readRequestJson(request) {
+  return new Promise((resolve, reject) => {
+    let rawBody = "";
+
+    request.on("data", (chunk) => {
+      rawBody += chunk.toString("utf-8");
+
+      if (rawBody.length > 64 * 1024) {
+        request.destroy();
+        reject(new Error("Request body is too large."));
+      }
+    });
+
+    request.on("end", () => {
+      try {
+        resolve(rawBody ? JSON.parse(rawBody) : {});
+      } catch {
+        reject(new Error("Request body was not valid JSON."));
+      }
+    });
+
+    request.on("error", reject);
+  });
+}
+
+function startFlBridge(port) {
+  const server = http.createServer(async (request, response) => {
+    if (!request.url) {
+      writeJson(response, 404, { error: "Not found" });
+      return;
+    }
+
+    if (request.method === "OPTIONS") {
+      writeJson(response, 204, {});
+      return;
+    }
+
+    const url = new URL(request.url, `http://127.0.0.1:${port}`);
+
+    try {
+      if (request.method === "GET" && url.pathname === "/health") {
+        writeJson(response, 200, {
+          app: "MixerLink",
+          bridge: "fl-studio-local",
+          latestSequence: bridgeSequence
+        });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/events") {
+        const after = Number(url.searchParams.get("after") ?? 0);
+        writeJson(response, 200, {
+          latestSequence: bridgeSequence,
+          events: bridgeEvents.filter((event) => event.id > after)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/operation") {
+        const body = await readRequestJson(request);
+        const operation = body.operation ?? body;
+
+        if (!isBridgeOperation(operation)) {
+          writeJson(response, 400, { error: "Bridge operation was not valid." });
+          return;
+        }
+
+        mainWindow?.webContents.send("bridge:operation-from-fl", operation);
+        writeJson(response, 200, { ok: true });
+        return;
+      }
+
+      writeJson(response, 404, { error: "Not found" });
+    } catch (error) {
+      writeJson(response, 500, {
+        error: error instanceof Error ? error.message : "Unknown bridge error"
+      });
+    }
+  });
+
+  server.listen(port, "127.0.0.1", () => {
+    console.log(`MixerLink FL bridge listening on http://127.0.0.1:${port}`);
+  });
+
+  server.on("error", (error) => {
+    if (error.code === "EADDRINUSE") {
+      console.log(`MixerLink FL bridge port ${port} is already in use.`);
+      return;
+    }
+
+    console.error(error);
+  });
+
+  return server;
 }
 
 async function scanCompatibility() {
@@ -285,6 +428,7 @@ app.whenReady().then(() => {
   ipcMain.handle("fl-studio:launch", launchFlStudio);
   ipcMain.handle("project:open", openProjectInFlStudio);
   ipcMain.handle("path:reveal", revealPath);
+  ipcMain.handle("bridge:queue-operation", (_event, operation) => enqueueBridgeOperation(operation));
   ipcMain.handle("relay-urls:get", getLocalRelayUrls);
   ipcMain.handle("fl-studio-folders:get", getCustomFlStudioFolders);
   ipcMain.handle("fl-studio-folders:add", addCustomFlStudioFolder);
@@ -299,6 +443,7 @@ app.whenReady().then(() => {
   ipcMain.handle("plugin-folders:add", addCustomPluginFolder);
   ipcMain.handle("plugin-folders:remove", removeCustomPluginFolder);
   sessionRelay = startSessionRelay(4317);
+  flBridgeServer = startFlBridge(4318);
   createWindow();
 
   app.on("activate", () => {
@@ -310,6 +455,7 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   sessionRelay?.close();
+  flBridgeServer?.close();
 
   if (process.platform !== "darwin") {
     app.quit();
