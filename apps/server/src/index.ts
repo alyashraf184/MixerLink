@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import { WebSocketServer } from "ws";
 import type { WebSocket } from "ws";
 import type { ClientMessage, ServerMessage } from "@mixerlink/protocol";
-import type { ActivityEvent, Collaborator, CompatibilitySnapshot, SessionCode, SessionState } from "@mixerlink/shared";
+import type {
+  ActivityEvent,
+  BridgeOperation,
+  BridgeState,
+  Collaborator,
+  CompatibilitySnapshot,
+  SessionCode,
+  SessionState
+} from "@mixerlink/shared";
 
 const port = Number(process.env.PORT ?? 4317);
 const server = new WebSocketServer({ port });
@@ -16,6 +24,7 @@ type RoomMember = {
 type Room = {
   code: SessionCode;
   members: Map<string, RoomMember>;
+  bridge: BridgeState;
   activity: ActivityEvent[];
 };
 
@@ -84,6 +93,7 @@ function getRoomState(room: Room): SessionState {
     code: room.code,
     collaborators: Array.from(room.members.values(), (member) => member.collaborator),
     compatibility,
+    bridge: room.bridge,
     activity: room.activity
   };
 }
@@ -114,6 +124,61 @@ function broadcastRoomState(room: Room): void {
 
   for (const member of room.members.values()) {
     send(member.socket, message);
+  }
+}
+
+function createBridgeState(): BridgeState {
+  return {
+    transport: "stopped",
+    tempoBpm: 120
+  };
+}
+
+function applyBridgeOperation(room: Room, operation: BridgeOperation, collaboratorId: string): string | undefined {
+  const createdAt = new Date().toISOString();
+
+  switch (operation.type) {
+    case "transport.play":
+      room.bridge = {
+        ...room.bridge,
+        transport: "playing",
+        lastOperation: {
+          type: operation.type,
+          collaboratorId,
+          createdAt
+        }
+      };
+      return "started playback";
+
+    case "transport.stop":
+      room.bridge = {
+        ...room.bridge,
+        transport: "stopped",
+        lastOperation: {
+          type: operation.type,
+          collaboratorId,
+          createdAt
+        }
+      };
+      return "stopped playback";
+
+    case "tempo.changed": {
+      const bpm = Math.round(Number(operation.payload.bpm) * 10) / 10;
+      if (!Number.isFinite(bpm) || bpm < 20 || bpm > 300) {
+        return undefined;
+      }
+
+      room.bridge = {
+        ...room.bridge,
+        tempoBpm: bpm,
+        lastOperation: {
+          type: operation.type,
+          collaboratorId,
+          createdAt
+        }
+      };
+      return `set tempo to ${bpm} BPM`;
+    }
   }
 }
 
@@ -186,6 +251,7 @@ function handleMessage(socket: WebSocket, message: ClientMessage): void {
       const room: Room = {
         code,
         members: new Map(),
+        bridge: createBridgeState(),
         activity: []
       };
 
@@ -237,6 +303,37 @@ function handleMessage(socket: WebSocket, message: ClientMessage): void {
         room,
         "compatibility.updated",
         `${member.collaborator.displayName} shared a compatibility snapshot.`,
+        member.collaborator.id
+      );
+      broadcastRoomState(room);
+      return;
+    }
+
+    case "bridge.operation": {
+      const code = socketRooms.get(socket);
+      const room = code ? rooms.get(code) : undefined;
+
+      if (!room) {
+        sendError(socket, "Join or create a session before sending bridge operations.");
+        return;
+      }
+
+      const member = Array.from(room.members.values()).find((roomMember) => roomMember.socket === socket);
+      if (!member) {
+        sendError(socket, "Session membership could not be found.");
+        return;
+      }
+
+      const activityMessage = applyBridgeOperation(room, message.payload, member.collaborator.id);
+      if (!activityMessage) {
+        sendError(socket, "Bridge operation was not valid.");
+        return;
+      }
+
+      addActivity(
+        room,
+        "bridge.operation",
+        `${member.collaborator.displayName} ${activityMessage}.`,
         member.collaborator.id
       );
       broadcastRoomState(room);

@@ -49,15 +49,45 @@ export type CompatibilitySnapshot = {
 export type ActivityEvent = {
   id: string;
   createdAt: string;
-  type: "session.created" | "collaborator.joined" | "collaborator.left" | "compatibility.updated";
+  type:
+    | "session.created"
+    | "collaborator.joined"
+    | "collaborator.left"
+    | "compatibility.updated"
+    | "bridge.operation";
   message: string;
   collaboratorId?: string;
+};
+
+export type BridgeOperation =
+  | {
+      type: "transport.play" | "transport.stop";
+      payload?: {
+        positionBeats?: number;
+      };
+    }
+  | {
+      type: "tempo.changed";
+      payload: {
+        bpm: number;
+      };
+    };
+
+export type BridgeState = {
+  transport: "playing" | "stopped";
+  tempoBpm: number;
+  lastOperation?: {
+    type: BridgeOperation["type"];
+    collaboratorId: string;
+    createdAt: string;
+  };
 };
 
 export type SessionState = {
   code: SessionCode;
   collaborators: Collaborator[];
   compatibility: Record<string, CompatibilitySnapshot>;
+  bridge: BridgeState;
   activity: ActivityEvent[];
 };
 

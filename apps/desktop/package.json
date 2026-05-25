@@ -5,7 +5,7 @@
   "description": "Desktop companion app for FL Studio collaboration.",
   "author": "MixerLink",
   "type": "module",
-  "main": "electron/main.cjs",
+  "main": "./main.cjs",
   "scripts": {
     "dev": "vite",
     "app:dev": "node scripts/dev-electron.cjs",
@@ -33,12 +33,15 @@
     "appId": "com.mixerlink.desktop",
     "productName": "MixerLink",
     "electronVersion": "31.7.7",
+    "asar": false,
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**/*",
+      "main.cjs",
       "electron/**/*",
+      "fl-bridge/**/*",
       "package.json"
     ],
     "extraResources": [

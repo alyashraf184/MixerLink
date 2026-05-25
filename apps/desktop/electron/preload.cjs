@@ -5,6 +5,20 @@ contextBridge.exposeInMainWorld("mixerlink", {
   launchFlStudio: (executablePath) => ipcRenderer.invoke("fl-studio:launch", executablePath),
   openProjectInFlStudio: (request) => ipcRenderer.invoke("project:open", request),
   revealPath: (targetPath) => ipcRenderer.invoke("path:reveal", targetPath),
+  queueBridgeOperation: (operation) => ipcRenderer.invoke("bridge:queue-operation", operation),
+  getFlBridgeStatus: () => ipcRenderer.invoke("fl-bridge:status"),
+  installFlBridgeScript: () => ipcRenderer.invoke("fl-bridge:install"),
+  getFlBridgeRuntime: () => ipcRenderer.invoke("fl-bridge:runtime"),
+  onFlBridgeRuntime: (callback) => {
+    const listener = (_event, runtime) => callback(runtime);
+    ipcRenderer.on("fl-bridge:runtime", listener);
+    return () => ipcRenderer.removeListener("fl-bridge:runtime", listener);
+  },
+  onBridgeOperationFromFl: (callback) => {
+    const listener = (_event, operation) => callback(operation);
+    ipcRenderer.on("bridge:operation-from-fl", listener);
+    return () => ipcRenderer.removeListener("bridge:operation-from-fl", listener);
+  },
   getLocalRelayUrls: () => ipcRenderer.invoke("relay-urls:get"),
   getCustomFlStudioFolders: () => ipcRenderer.invoke("fl-studio-folders:get"),
   addCustomFlStudioFolder: () => ipcRenderer.invoke("fl-studio-folders:add"),

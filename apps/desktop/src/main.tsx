@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { ClientMessage, ServerMessage } from "@mixerlink/protocol";
 import {
   compareCompatibilitySnapshots,
+  type BridgeOperation,
   type CompatibilityComparison,
   type CompatibilitySnapshot,
   type SessionState
@@ -10,6 +11,26 @@ import {
 import "./styles.css";
 
 const defaultRelayUrl = "ws://localhost:4317";
+
+type FlBridgeStatus = {
+  installed: boolean;
+  scriptOutdated?: boolean;
+  installPath: string;
+  legacyInstalled?: boolean;
+  legacyInstallPath?: string;
+  commandPath?: string;
+  runtimePath?: string;
+  bridgeUrl: string;
+  runtime?: FlBridgeRuntime;
+};
+
+type FlBridgeRuntime = {
+  connected: boolean;
+  lastSeenAt?: string;
+  playing?: boolean;
+  tempoBpm?: number;
+  script?: string;
+};
 
 const mockCompatibilitySnapshot: CompatibilitySnapshot = {
   clientVersion: "0.1.0",
@@ -53,6 +74,7 @@ const mockCompatibilitySnapshot: CompatibilitySnapshot = {
 
 function App() {
   const socketRef = useRef<WebSocket | null>(null);
+  const appliedBridgeOperationRef = useRef<string | null>(null);
   const [sessionMode, setSessionMode] = useState<"start" | "join">("start");
   const [displayName, setDisplayName] = useState(() => localStorage.getItem("mixerlink.displayName") ?? "Producer");
   const [relayUrl, setRelayUrl] = useState(() => localStorage.getItem("mixerlink.relayUrl") ?? defaultRelayUrl);
@@ -71,6 +93,10 @@ function App() {
   const [projectFolders, setProjectFolders] = useState<string[]>([]);
   const [customPluginFolders, setCustomPluginFolders] = useState<string[]>([]);
   const [localSnapshot, setLocalSnapshot] = useState<CompatibilitySnapshot | null>(null);
+  const [bridgeTempoInput, setBridgeTempoInput] = useState("120");
+  const [flBridgeStatus, setFlBridgeStatus] = useState<FlBridgeStatus | null>(null);
+  const [flBridgeRuntime, setFlBridgeRuntime] = useState<FlBridgeRuntime | null>(null);
+  const [isDetectionOpen, setIsDetectionOpen] = useState(false);
 
   useEffect(() => {
     let isCurrentSocket = true;
@@ -157,23 +183,60 @@ function App() {
   }, [relayUrl]);
 
   useEffect(() => {
-    if (!window.mixerlink) {
+    if (session?.bridge.tempoBpm) {
+      setBridgeTempoInput(String(session.bridge.tempoBpm));
+    }
+  }, [session?.bridge.tempoBpm]);
+
+  useEffect(() => {
+    const mixerlink = window.mixerlink;
+
+    if (!mixerlink) {
       return;
     }
 
     Promise.all([
-      window.mixerlink.getLocalRelayUrls(),
-      window.mixerlink.getCustomFlStudioFolders(),
-      window.mixerlink.getUserDataFolders(),
-      window.mixerlink.getProjectFolders(),
-      window.mixerlink.getCustomPluginFolders()
+      mixerlink.getLocalRelayUrls(),
+      mixerlink.getCustomFlStudioFolders(),
+      mixerlink.getUserDataFolders(),
+      mixerlink.getProjectFolders(),
+      mixerlink.getCustomPluginFolders(),
+      mixerlink.getFlBridgeStatus()
     ])
-      .then(([nextLocalRelayUrls, nextFlStudioFolders, nextUserDataFolders, nextProjectFolders, nextPluginFolders]) => {
+      .then(async ([
+        nextLocalRelayUrls,
+        nextFlStudioFolders,
+        nextUserDataFolders,
+        nextProjectFolders,
+        nextPluginFolders,
+        nextFlBridgeStatus
+      ]) => {
         setLocalRelayUrls(nextLocalRelayUrls);
         setCustomFlStudioFolders(nextFlStudioFolders);
         setUserDataFolders(nextUserDataFolders);
         setProjectFolders(nextProjectFolders);
         setCustomPluginFolders(nextPluginFolders);
+
+        if (!nextFlBridgeStatus.installed || nextFlBridgeStatus.scriptOutdated) {
+          try {
+            const installedStatus = await mixerlink.installFlBridgeScript();
+            setFlBridgeStatus(installedStatus);
+            setFlBridgeRuntime(installedStatus.runtime ?? null);
+            setNotice(
+              nextFlBridgeStatus.scriptOutdated
+                ? "MixerLink Bridge script updated. Restart FL Studio once to load the new bridge."
+                : "MixerLink Bridge script installed. Select 'MixerLink Bridge' in FL Studio MIDI settings."
+            );
+            return;
+          } catch {
+            setFlBridgeStatus(nextFlBridgeStatus);
+            setFlBridgeRuntime(nextFlBridgeStatus.runtime ?? null);
+            return;
+          }
+        }
+
+        setFlBridgeStatus(nextFlBridgeStatus);
+        setFlBridgeRuntime(nextFlBridgeStatus.runtime ?? null);
       })
       .catch(() => {
         setLocalRelayUrls([defaultRelayUrl]);
@@ -181,12 +244,75 @@ function App() {
         setUserDataFolders([]);
         setProjectFolders([]);
         setCustomPluginFolders([]);
+        setFlBridgeStatus(null);
+        setFlBridgeRuntime(null);
       });
   }, []);
+
+  useEffect(() => {
+    if (!window.mixerlink?.onFlBridgeRuntime) {
+      return;
+    }
+
+    return window.mixerlink.onFlBridgeRuntime((runtime) => {
+      setFlBridgeRuntime(runtime);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!window.mixerlink?.getFlBridgeRuntime) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      window.mixerlink?.getFlBridgeRuntime().then(setFlBridgeRuntime).catch(() => undefined);
+    }, 1500);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!window.mixerlink?.onBridgeOperationFromFl) {
+      return;
+    }
+
+    return window.mixerlink.onBridgeOperationFromFl((operation) => {
+      if (socketRef.current?.readyState !== WebSocket.OPEN) {
+        setNotice("FL Studio sent a bridge operation, but no MixerLink room is connected.");
+        return;
+      }
+
+      socketRef.current.send(
+        JSON.stringify({
+          type: "bridge.operation",
+          payload: operation
+        } satisfies ClientMessage)
+      );
+      setNotice(`FL Studio sent ${operation.type} to the room.`);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!session?.bridge.lastOperation || session.bridge.lastOperation.collaboratorId === ownCollaboratorId) {
+      return;
+    }
+
+    const operation = createBridgeOperationFromState(session);
+    const operationKey = `${session.bridge.lastOperation.createdAt}:${session.bridge.lastOperation.type}`;
+
+    if (!operation || appliedBridgeOperationRef.current === operationKey) {
+      return;
+    }
+
+    appliedBridgeOperationRef.current = operationKey;
+    queueBridgeOperationForFl(operation);
+  }, [ownCollaboratorId, session]);
 
   const canSend = connectionStatus === "connected";
   const collaboratorCount = useMemo(() => session?.collaborators.length ?? 0, [session]);
   const hasSharedCompatibility = Boolean(ownCollaboratorId && session?.compatibility[ownCollaboratorId]);
+  const bridgeState = session?.bridge ?? { transport: "stopped" as const, tempoBpm: 120 };
+  const canControlBridge = Boolean(window.mixerlink) || (canSend && Boolean(session));
   const compatibilityReports = useMemo(() => {
     if (!session || !ownCollaboratorId) {
       return [];
@@ -274,6 +400,62 @@ function App() {
         code: joinCode,
         displayName
       }
+    });
+  }
+
+  function sendBridgeOperation(operation: BridgeOperation) {
+    if (socketRef.current?.readyState === WebSocket.OPEN && session) {
+      socketRef.current.send(
+        JSON.stringify({
+          type: "bridge.operation",
+          payload: operation
+        } satisfies ClientMessage)
+      );
+    }
+
+    queueBridgeOperationForFl(operation);
+  }
+
+  async function queueBridgeOperationForFl(operation: BridgeOperation) {
+    try {
+      const queued = await window.mixerlink?.queueBridgeOperation(operation);
+      setNotice(
+        queued
+          ? `Queued ${operation.type} for FL Studio${session ? " and sent it to the room" : ""}.`
+          : `Sent ${operation.type} to the room.`
+      );
+    } catch {
+      setNotice("MixerLink could not queue that operation for the local FL bridge.");
+    }
+  }
+
+  async function installFlBridgeScript() {
+    if (!window.mixerlink) {
+      setNotice("FL Studio bridge installation is available in the desktop app.");
+      return;
+    }
+
+    try {
+      const status = await window.mixerlink.installFlBridgeScript();
+      setFlBridgeStatus(status);
+      setFlBridgeRuntime(status.runtime ?? null);
+      setNotice("MixerLink Bridge script installed. Select 'MixerLink Bridge' in FL Studio MIDI settings.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "MixerLink could not install the FL Studio bridge script.");
+    }
+  }
+
+  function syncTempo() {
+    const bpm = Math.round(Number(bridgeTempoInput) * 10) / 10;
+
+    if (!Number.isFinite(bpm) || bpm < 20 || bpm > 300) {
+      setNotice("Tempo must be between 20 and 300 BPM.");
+      return;
+    }
+
+    sendBridgeOperation({
+      type: "tempo.changed",
+      payload: { bpm }
     });
   }
 
@@ -467,177 +649,293 @@ function App() {
     window.setTimeout(() => setCopiedSessionCode(false), 1400);
   }
 
+  const sessionControls = (
+    <section className="control-panel">
+      <div className="panel-heading">
+        <h2>{session ? "Room" : "Start"}</h2>
+        <span>{sessionMode}</span>
+      </div>
+      <div className="mode-tabs" role="tablist" aria-label="Session mode">
+        <button
+          type="button"
+          className={`create-tab ${sessionMode === "start" ? "active" : ""}`}
+          role="tab"
+          aria-selected={sessionMode === "start"}
+          onClick={() => setSessionMode("start")}
+        >
+          Create
+        </button>
+        <button
+          type="button"
+          className={`join-tab ${sessionMode === "join" ? "active" : ""}`}
+          role="tab"
+          aria-selected={sessionMode === "join"}
+          onClick={() => setSessionMode("join")}
+        >
+          Join
+        </button>
+      </div>
+      <div className={`mode-content ${isCreatingSession ? "creating" : ""}`} key={sessionMode}>
+        <div className="session-form">
+          <label>
+            Display name
+            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+          </label>
+          <label>
+            Relay address
+            <span className="relay-input-row">
+              <input
+                spellCheck={false}
+                value={relayInput}
+                onChange={(event) => setRelayInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    applyRelayUrl();
+                  }
+                }}
+              />
+              <button type="button" className="secondary compact" onClick={applyRelayUrl}>
+                Connect
+              </button>
+            </span>
+          </label>
+          {localRelayUrls.length > 0 ? (
+            <div className="relay-address-list">
+              <span>Your relay addresses</span>
+              <div>
+                {localRelayUrls.map((url) => (
+                  <button
+                    type="button"
+                    className={url === relayUrl ? "active" : ""}
+                    key={url}
+                    onClick={() => {
+                      setRelayInput(url);
+                      setRelayUrl(url);
+                    }}
+                    onDoubleClick={() => copyRelayUrl(url)}
+                    title="Click to use this relay. Double-click to copy it."
+                  >
+                    {url}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {(sessionMode === "join" || session) ? (
+            <label>
+              Session code
+              <span className="code-input-row">
+                <input
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="123456"
+                  readOnly={sessionMode === "start" && Boolean(session)}
+                  value={session?.code ?? joinCode}
+                  onChange={(event) => setJoinCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                />
+                {session ? (
+                  <button
+                    type="button"
+                    className="copy-icon-button"
+                    aria-label={copiedSessionCode ? "Session code copied" : "Copy session code"}
+                    title={copiedSessionCode ? "Copied" : "Copy session code"}
+                    onClick={copySessionCode}
+                  >
+                    <span aria-hidden="true" />
+                  </button>
+                ) : null}
+              </span>
+            </label>
+          ) : null}
+        </div>
+        <div className="actions">
+          {sessionMode === "start" ? (
+            <button
+              type="button"
+              className={isCreatingSession ? "starting-session" : ""}
+              disabled={!canSend || isCreatingSession}
+              onClick={createSession}
+            >
+              {isCreatingSession ? "Creating..." : "Start Session"}
+            </button>
+          ) : (
+            <button type="button" disabled={!canSend || joinCode.length !== 6} onClick={joinSession}>
+              Join Session
+            </button>
+          )}
+          <button
+            type="button"
+            className="secondary"
+            disabled={isScanningCompatibility}
+            onClick={scanLocalCompatibility}
+          >
+            {isScanningCompatibility ? "Scanning..." : "Scan Local Setup"}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!canSend || !session || isScanningCompatibility}
+            onClick={shareCompatibility}
+          >
+            {isScanningCompatibility
+              ? "Scanning..."
+              : hasSharedCompatibility
+                ? "Refresh Compatibility"
+                : "Share Compatibility"}
+          </button>
+          {session ? (
+            <button type="button" className="secondary danger" disabled={!canSend} onClick={leaveSession}>
+              Leave Session
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+
+  const detectionPanel = (
+    <aside className={`folder-panel detection-drawer ${isDetectionOpen ? "open" : ""}`} aria-hidden={!isDetectionOpen}>
+      <div className="panel-heading">
+        <h2>Detection</h2>
+        <button type="button" className="secondary compact" onClick={() => setIsDetectionOpen(false)}>
+          Close
+        </button>
+      </div>
+      <div className="folder-manager">
+        <FolderPicker
+          title="FL Studio"
+          emptyText="No custom FL Studio folders added."
+          folders={customFlStudioFolders}
+          addLabel="Add FL Studio Folder"
+          onAdd={addFlStudioFolder}
+          onRemove={removeFlStudioFolder}
+        />
+        <FolderPicker
+          title="User data"
+          emptyText="No user data folders added."
+          folders={userDataFolders}
+          addLabel="Add User Data Folder"
+          onAdd={addUserDataFolder}
+          onRemove={removeUserDataFolder}
+        />
+        <FolderPicker
+          title="Projects"
+          emptyText="No project folders added."
+          folders={projectFolders}
+          addLabel="Add Project Folder"
+          onAdd={addProjectFolder}
+          onRemove={removeProjectFolder}
+        />
+        <FolderPicker
+          title="Plugins"
+          emptyText="No custom plugin folders added."
+          folders={customPluginFolders}
+          addLabel="Add Plugin Folder"
+          onAdd={addPluginFolder}
+          onRemove={removePluginFolder}
+        />
+      </div>
+    </aside>
+  );
+
+  if (!session) {
+    return (
+      <main className="app-shell lobby-mode">
+        <div className="animated-stage" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <section className="lobby-layout">
+          <div className="lobby-hero">
+            <p className="eyebrow logo-wordmark">MixerLink</p>
+            <h1>Collaborative control for FL Studio sessions</h1>
+            <p className="lobby-copy">Create a room, connect FL Studio, and keep transport and compatibility in one focused workspace.</p>
+            <div className="lobby-status-row">
+              <span className={`connection-pill ${connectionStatus}`}>{connectionStatus}</span>
+              <span>{flBridgeStatus?.installed ? "MIDI bridge ready" : "FL bridge pending"}</span>
+            </div>
+          </div>
+          <div className="lobby-card">
+            {sessionControls}
+          </div>
+          <div className="lobby-side">
+            <p className="notice-line">{notice}</p>
+            <LocalIntegrationPanel
+              snapshot={localSnapshot}
+              isScanning={isScanningCompatibility}
+              onScan={scanLocalCompatibility}
+              onLaunchFlStudio={launchFlStudio}
+              onOpenProject={openProject}
+              onRevealPath={revealPath}
+            />
+            <button type="button" className="secondary" onClick={() => setIsDetectionOpen(true)}>
+              Detection Folders
+            </button>
+          </div>
+        </section>
+        {isDetectionOpen ? <button type="button" className="drawer-backdrop" aria-label="Close detection" onClick={() => setIsDetectionOpen(false)} /> : null}
+        {detectionPanel}
+      </main>
+    );
+  }
+
   return (
-    <main className="app-shell">
-      <div className="starfield" aria-hidden="true">
-        <span className="stars stars-small" />
-        <span className="stars stars-medium" />
-        <span className="stars stars-large" />
+    <main className="app-shell session-mode">
+      <div className="animated-stage" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
       </div>
       <header className="app-header">
         <div className="top-line">
           <div>
-            <p className="eyebrow">MixerLink</p>
-            <h1>Live collaboration for FL Studio sessions.</h1>
+            <p className="eyebrow logo-wordmark">MixerLink</p>
+            <h1>Room {session.code}</h1>
           </div>
-          <span className={`connection-pill ${connectionStatus}`}>{connectionStatus}</span>
+          <div className="header-status">
+            <span className={`connection-pill ${connectionStatus}`}>{connectionStatus}</span>
+            <span>{collaboratorCount} connected</span>
+            <button type="button" className="secondary compact" onClick={() => setIsDetectionOpen(true)}>
+              Detection
+            </button>
+          </div>
         </div>
       </header>
-      <div className="dashboard-grid">
-      <section className="control-panel">
-        <div className="panel-heading">
-          <h2>Session</h2>
-          <span>{sessionMode}</span>
-        </div>
-        <div className="mode-tabs" role="tablist" aria-label="Session mode">
-          <button
-            type="button"
-            className={`create-tab ${sessionMode === "start" ? "active" : ""}`}
-            role="tab"
-            aria-selected={sessionMode === "start"}
-            onClick={() => setSessionMode("start")}
-          >
-            Create
-          </button>
-          <button
-            type="button"
-            className={`join-tab ${sessionMode === "join" ? "active" : ""}`}
-            role="tab"
-            aria-selected={sessionMode === "join"}
-            onClick={() => setSessionMode("join")}
-          >
-            Join
-          </button>
-        </div>
-        <div className={`mode-content ${isCreatingSession ? "creating" : ""}`} key={sessionMode}>
-          <div className="session-form">
-            <label>
-              Display name
-              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
-            </label>
-            <label>
-              Relay address
-              <span className="relay-input-row">
-                <input
-                  spellCheck={false}
-                  value={relayInput}
-                  onChange={(event) => setRelayInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      applyRelayUrl();
-                    }
-                  }}
-                />
-                <button type="button" className="secondary compact" onClick={applyRelayUrl}>
-                  Connect
-                </button>
-              </span>
-            </label>
-            {localRelayUrls.length > 0 ? (
-              <div className="relay-address-list">
-                <span>Your relay addresses</span>
-                <div>
-                  {localRelayUrls.map((url) => (
-                    <button
-                      type="button"
-                      className={url === relayUrl ? "active" : ""}
-                      key={url}
-                      onClick={() => {
-                        setRelayInput(url);
-                        setRelayUrl(url);
-                      }}
-                      onDoubleClick={() => copyRelayUrl(url)}
-                      title="Click to use this relay. Double-click to copy it."
-                    >
-                      {url}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {(sessionMode === "join" || session) ? (
-              <label>
-                Session code
-                <span className="code-input-row">
-                  <input
-                    inputMode="numeric"
-                    maxLength={6}
-                    placeholder="123456"
-                    readOnly={sessionMode === "start" && Boolean(session)}
-                    value={session?.code ?? joinCode}
-                    onChange={(event) => setJoinCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                  />
-                  {session ? (
-                    <button
-                      type="button"
-                      className="copy-icon-button"
-                      aria-label={copiedSessionCode ? "Session code copied" : "Copy session code"}
-                      title={copiedSessionCode ? "Copied" : "Copy session code"}
-                      onClick={copySessionCode}
-                    >
-                      <span aria-hidden="true" />
-                    </button>
-                  ) : null}
-                </span>
-              </label>
-            ) : null}
+      <div className="session-workspace">
+        <aside className="session-rail">
+          {sessionControls}
+        </aside>
+        <section className="status-panel session-live">
+          <div className="panel-heading">
+            <h2>Session Workspace</h2>
+            <span>{Object.keys(session.compatibility).length} shared</span>
           </div>
-          <div className="actions">
-            {sessionMode === "start" ? (
-              <button
-                type="button"
-                className={isCreatingSession ? "starting-session" : ""}
-                disabled={!canSend || isCreatingSession}
-                onClick={createSession}
-              >
-                {isCreatingSession ? "Creating..." : "Start Session"}
-              </button>
-            ) : (
-              <button type="button" disabled={!canSend || joinCode.length !== 6} onClick={joinSession}>
-                Join Session
-              </button>
-            )}
-            <button
-              type="button"
-              className="secondary"
-              disabled={isScanningCompatibility}
-              onClick={scanLocalCompatibility}
-            >
-              {isScanningCompatibility ? "Scanning..." : "Scan Local Setup"}
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              disabled={!canSend || !session || isScanningCompatibility}
-              onClick={shareCompatibility}
-            >
-              {isScanningCompatibility
-                ? "Scanning..."
-                : hasSharedCompatibility
-                  ? "Refresh Compatibility"
-                  : "Share Compatibility"}
-            </button>
-            <button type="button" className="secondary danger" disabled={!canSend || !session} onClick={leaveSession}>
-              Leave Session
-            </button>
+          <p className="notice-line">{notice}</p>
+          <div className="session-panels">
+            <LocalIntegrationPanel
+              snapshot={localSnapshot}
+              isScanning={isScanningCompatibility}
+              onScan={scanLocalCompatibility}
+              onLaunchFlStudio={launchFlStudio}
+              onOpenProject={openProject}
+              onRevealPath={revealPath}
+            />
+            <BridgeControlPanel
+              canControl={canControlBridge}
+              bridgeState={bridgeState}
+              flBridgeStatus={flBridgeStatus}
+              flBridgeRuntime={flBridgeRuntime}
+              tempoInput={bridgeTempoInput}
+              onTempoInputChange={setBridgeTempoInput}
+              onPlay={() => sendBridgeOperation({ type: "transport.play" })}
+              onStop={() => sendBridgeOperation({ type: "transport.stop" })}
+              onSyncTempo={syncTempo}
+              onInstallBridge={installFlBridgeScript}
+            />
           </div>
-        </div>
-      </section>
-      <section className={`status-panel ${session ? "session-live" : ""}`}>
-        <div className="panel-heading">
-          <h2>{session ? `Session ${session.code}` : "Session Foundation"}</h2>
-          <span>{collaboratorCount} connected</span>
-        </div>
-        <p>{notice}</p>
-        <LocalIntegrationPanel
-          snapshot={localSnapshot}
-          isScanning={isScanningCompatibility}
-          onScan={scanLocalCompatibility}
-          onLaunchFlStudio={launchFlStudio}
-          onOpenProject={openProject}
-          onRevealPath={revealPath}
-        />
-        {session ? (
           <div className="session-grid">
             <section className="session-section">
               <div className="section-heading">
@@ -785,50 +1083,128 @@ function App() {
               </ol>
             </section>
           </div>
-        ) : null}
-      </section>
-      <aside className="folder-panel">
-        <div className="panel-heading">
-          <h2>Detection</h2>
-          <span>folders</span>
-        </div>
-        <div className="folder-manager">
-          <FolderPicker
-            title="FL Studio"
-            emptyText="No custom FL Studio folders added."
-            folders={customFlStudioFolders}
-            addLabel="Add FL Studio Folder"
-            onAdd={addFlStudioFolder}
-            onRemove={removeFlStudioFolder}
-          />
-          <FolderPicker
-            title="User data"
-            emptyText="No user data folders added."
-            folders={userDataFolders}
-            addLabel="Add User Data Folder"
-            onAdd={addUserDataFolder}
-            onRemove={removeUserDataFolder}
-          />
-          <FolderPicker
-            title="Projects"
-            emptyText="No project folders added."
-            folders={projectFolders}
-            addLabel="Add Project Folder"
-            onAdd={addProjectFolder}
-            onRemove={removeProjectFolder}
-          />
-          <FolderPicker
-            title="Plugins"
-            emptyText="No custom plugin folders added."
-            folders={customPluginFolders}
-            addLabel="Add Plugin Folder"
-            onAdd={addPluginFolder}
-            onRemove={removePluginFolder}
-          />
-        </div>
-      </aside>
+        </section>
       </div>
+      {isDetectionOpen ? <button type="button" className="drawer-backdrop" aria-label="Close detection" onClick={() => setIsDetectionOpen(false)} /> : null}
+      {detectionPanel}
     </main>
+  );
+
+}
+
+function createBridgeOperationFromState(session: SessionState): BridgeOperation | undefined {
+  switch (session.bridge.lastOperation?.type) {
+    case "transport.play":
+      return { type: "transport.play" };
+    case "transport.stop":
+      return { type: "transport.stop" };
+    case "tempo.changed":
+      return {
+        type: "tempo.changed",
+        payload: {
+          bpm: session.bridge.tempoBpm
+        }
+      };
+    default:
+      return undefined;
+  }
+}
+
+function BridgeControlPanel({
+  canControl,
+  bridgeState,
+  flBridgeStatus,
+  flBridgeRuntime,
+  tempoInput,
+  onTempoInputChange,
+  onPlay,
+  onStop,
+  onSyncTempo,
+  onInstallBridge
+}: {
+  canControl: boolean;
+  bridgeState: SessionState["bridge"];
+  flBridgeStatus: FlBridgeStatus | null;
+  flBridgeRuntime: FlBridgeRuntime | null;
+  tempoInput: string;
+  onTempoInputChange: (value: string) => void;
+  onPlay: () => void;
+  onStop: () => void;
+  onSyncTempo: () => void;
+  onInstallBridge: () => void;
+}) {
+  const flConnected = Boolean(flBridgeRuntime?.connected);
+  const midiReady = Boolean(flBridgeStatus?.installed);
+  const bridgeStatusLabel = flConnected ? "FL online" : midiReady ? "MIDI ready" : "FL offline";
+
+  return (
+    <section className="bridge-panel">
+      <div className="section-heading">
+        <h3>Bridge Sync</h3>
+        <span>{bridgeStatusLabel}</span>
+      </div>
+      <div className="bridge-install-row">
+        <div>
+          <strong>
+            {flConnected
+              ? `FL Studio connected${typeof flBridgeRuntime?.tempoBpm === "number" ? ` at ${flBridgeRuntime.tempoBpm} BPM` : ""}`
+              : flBridgeStatus?.installed
+                ? "MIDI bridge ready"
+                : "FL script not installed"}
+          </strong>
+          <small>
+            {flConnected
+              ? `Loaded script: ${flBridgeRuntime?.script ?? "MixerLink Bridge"}`
+              : flBridgeStatus?.installed
+                ? "Commands are sent directly over the MixerLink loopMIDI port."
+                : "Install the bundled MIDI script, restart FL Studio, then select MixerLink Bridge in MIDI settings."}
+          </small>
+        </div>
+        <button type="button" className="secondary compact" onClick={onInstallBridge}>
+          {flBridgeStatus?.installed ? "Reinstall" : "Install"}
+        </button>
+      </div>
+      <div className="transport-strip">
+        <button type="button" disabled={!canControl} onClick={onPlay}>
+          Play
+        </button>
+        <button type="button" className="secondary" disabled={!canControl} onClick={onStop}>
+          Stop
+        </button>
+        <label>
+          Tempo
+          <span>
+            <input
+              inputMode="decimal"
+              value={tempoInput}
+              onChange={(event) => onTempoInputChange(event.target.value.replace(/[^\d.]/g, "").slice(0, 6))}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  onSyncTempo();
+                }
+              }}
+            />
+            <button type="button" className="secondary" disabled={!canControl} onClick={onSyncTempo}>
+              Sync
+            </button>
+          </span>
+        </label>
+      </div>
+      <dl className="bridge-metrics">
+        <div>
+          <dt>Transport</dt>
+          <dd>{bridgeState.transport}</dd>
+        </div>
+        <div>
+          <dt>Tempo</dt>
+          <dd>{bridgeState.tempoBpm} BPM</dd>
+        </div>
+        <div>
+          <dt>Bridge</dt>
+          <dd>{flConnected ? "FL online" : midiReady ? "MIDI" : "Install"}</dd>
+        </div>
+      </dl>
+    </section>
   );
 }
 

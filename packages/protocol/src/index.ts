@@ -1,4 +1,4 @@
-import type { CompatibilitySnapshot, SessionCode, SessionState } from "@mixerlink/shared";
+import type { BridgeOperation, CompatibilitySnapshot, SessionCode, SessionState } from "@mixerlink/shared";
 
 export type ClientMessage =
   | {
@@ -20,6 +20,10 @@ export type ClientMessage =
   | {
       type: "compatibility.update";
       payload: CompatibilitySnapshot;
+    }
+  | {
+      type: "bridge.operation";
+      payload: BridgeOperation;
     };
 
 export type ServerMessage =
