@@ -41,6 +41,7 @@
       "dist/**/*",
       "main.cjs",
       "electron/**/*",
+      "fl-bridge/**/*",
       "package.json"
     ],
     "extraResources": [

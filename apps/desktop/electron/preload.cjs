@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld("mixerlink", {
   openProjectInFlStudio: (request) => ipcRenderer.invoke("project:open", request),
   revealPath: (targetPath) => ipcRenderer.invoke("path:reveal", targetPath),
   queueBridgeOperation: (operation) => ipcRenderer.invoke("bridge:queue-operation", operation),
+  getFlBridgeStatus: () => ipcRenderer.invoke("fl-bridge:status"),
+  installFlBridgeScript: () => ipcRenderer.invoke("fl-bridge:install"),
   onBridgeOperationFromFl: (callback) => {
     const listener = (_event, operation) => callback(operation);
     ipcRenderer.on("bridge:operation-from-fl", listener);

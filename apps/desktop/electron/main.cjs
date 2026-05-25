@@ -12,6 +12,8 @@ let flBridgeServer;
 let mainWindow;
 let bridgeSequence = 0;
 const bridgeEvents = [];
+const flBridgeFolderName = "MixerLink Bridge";
+const flBridgeScriptName = "device_MixerLink Bridge.py";
 
 const { startSessionRelay } = require("./session-relay.cjs");
 
@@ -61,6 +63,47 @@ function getScannerModulePath() {
   }
 
   return path.join(__dirname, "..", "..", "..", "packages", "scanner", "dist", "index.js");
+}
+
+function getBundledFlBridgeScriptPath() {
+  return path.join(__dirname, "..", "fl-bridge", flBridgeFolderName, flBridgeScriptName);
+}
+
+function getFlBridgeInstallFolder() {
+  return path.join(app.getPath("documents"), "Image-Line", "FL Studio", "Settings", "Hardware", flBridgeFolderName);
+}
+
+function getFlBridgeInstallPath() {
+  return path.join(getFlBridgeInstallFolder(), flBridgeScriptName);
+}
+
+async function getFlBridgeStatus() {
+  const installPath = getFlBridgeInstallPath();
+
+  return {
+    installed: await pathExists(installPath),
+    installPath,
+    bridgeUrl: "http://127.0.0.1:4318"
+  };
+}
+
+async function installFlBridgeScript() {
+  const sourcePath = getBundledFlBridgeScriptPath();
+  const installFolder = getFlBridgeInstallFolder();
+  const installPath = getFlBridgeInstallPath();
+
+  if (!(await pathExists(sourcePath))) {
+    throw new Error("Bundled MixerLink FL Studio bridge script was not found.");
+  }
+
+  await fs.mkdir(installFolder, { recursive: true });
+  await fs.copyFile(sourcePath, installPath);
+
+  return {
+    installed: true,
+    installPath,
+    bridgeUrl: "http://127.0.0.1:4318"
+  };
 }
 
 function getLocalRelayUrls() {
@@ -161,6 +204,16 @@ function startFlBridge(port) {
 
     try {
       if (request.method === "GET" && url.pathname === "/health") {
+        writeJson(response, 200, {
+          app: "MixerLink",
+          bridge: "fl-studio-local",
+          latestSequence: bridgeSequence,
+          queuedEvents: bridgeEvents.length
+        });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/status") {
         writeJson(response, 200, {
           app: "MixerLink",
           bridge: "fl-studio-local",
@@ -429,6 +482,8 @@ app.whenReady().then(() => {
   ipcMain.handle("project:open", openProjectInFlStudio);
   ipcMain.handle("path:reveal", revealPath);
   ipcMain.handle("bridge:queue-operation", (_event, operation) => enqueueBridgeOperation(operation));
+  ipcMain.handle("fl-bridge:status", getFlBridgeStatus);
+  ipcMain.handle("fl-bridge:install", installFlBridgeScript);
   ipcMain.handle("relay-urls:get", getLocalRelayUrls);
   ipcMain.handle("fl-studio-folders:get", getCustomFlStudioFolders);
   ipcMain.handle("fl-studio-folders:add", addCustomFlStudioFolder);

@@ -10,6 +10,8 @@ declare global {
       openProjectInFlStudio: (request: { projectPath: string; executablePath?: string }) => Promise<{ ok: true }>;
       revealPath: (targetPath: string) => Promise<{ ok: true }>;
       queueBridgeOperation: (operation: import("@mixerlink/shared").BridgeOperation) => Promise<{ ok: true; id: number }>;
+      getFlBridgeStatus: () => Promise<{ installed: boolean; installPath: string; bridgeUrl: string }>;
+      installFlBridgeScript: () => Promise<{ installed: boolean; installPath: string; bridgeUrl: string }>;
       onBridgeOperationFromFl: (
         callback: (operation: import("@mixerlink/shared").BridgeOperation) => void
       ) => () => void;

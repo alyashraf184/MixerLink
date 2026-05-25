@@ -387,6 +387,31 @@ h1 {
   grid-template-columns: auto auto minmax(180px, 1fr);
 }
 
+.bridge-install-row {
+  align-items: center;
+  background: #151719;
+  border: 1px solid #2d3035;
+  border-radius: 6px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px 12px;
+}
+
+.bridge-install-row strong {
+  color: #f3f5f7;
+  display: block;
+}
+
+.bridge-install-row small {
+  color: #8b929c;
+  display: block;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
 .bridge-metrics,
 .comparison-card dl {
   display: grid;

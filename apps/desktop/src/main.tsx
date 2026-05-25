@@ -12,6 +12,12 @@ import "./styles.css";
 
 const defaultRelayUrl = "ws://localhost:4317";
 
+type FlBridgeStatus = {
+  installed: boolean;
+  installPath: string;
+  bridgeUrl: string;
+};
+
 const mockCompatibilitySnapshot: CompatibilitySnapshot = {
   clientVersion: "0.1.0",
   daw: {
@@ -74,6 +80,7 @@ function App() {
   const [customPluginFolders, setCustomPluginFolders] = useState<string[]>([]);
   const [localSnapshot, setLocalSnapshot] = useState<CompatibilitySnapshot | null>(null);
   const [bridgeTempoInput, setBridgeTempoInput] = useState("120");
+  const [flBridgeStatus, setFlBridgeStatus] = useState<FlBridgeStatus | null>(null);
 
   useEffect(() => {
     let isCurrentSocket = true;
@@ -166,23 +173,47 @@ function App() {
   }, [session?.bridge.tempoBpm]);
 
   useEffect(() => {
-    if (!window.mixerlink) {
+    const mixerlink = window.mixerlink;
+
+    if (!mixerlink) {
       return;
     }
 
     Promise.all([
-      window.mixerlink.getLocalRelayUrls(),
-      window.mixerlink.getCustomFlStudioFolders(),
-      window.mixerlink.getUserDataFolders(),
-      window.mixerlink.getProjectFolders(),
-      window.mixerlink.getCustomPluginFolders()
+      mixerlink.getLocalRelayUrls(),
+      mixerlink.getCustomFlStudioFolders(),
+      mixerlink.getUserDataFolders(),
+      mixerlink.getProjectFolders(),
+      mixerlink.getCustomPluginFolders(),
+      mixerlink.getFlBridgeStatus()
     ])
-      .then(([nextLocalRelayUrls, nextFlStudioFolders, nextUserDataFolders, nextProjectFolders, nextPluginFolders]) => {
+      .then(async ([
+        nextLocalRelayUrls,
+        nextFlStudioFolders,
+        nextUserDataFolders,
+        nextProjectFolders,
+        nextPluginFolders,
+        nextFlBridgeStatus
+      ]) => {
         setLocalRelayUrls(nextLocalRelayUrls);
         setCustomFlStudioFolders(nextFlStudioFolders);
         setUserDataFolders(nextUserDataFolders);
         setProjectFolders(nextProjectFolders);
         setCustomPluginFolders(nextPluginFolders);
+
+        if (!nextFlBridgeStatus.installed) {
+          try {
+            const installedStatus = await mixerlink.installFlBridgeScript();
+            setFlBridgeStatus(installedStatus);
+            setNotice("MixerLink Bridge script installed. Select 'MixerLink Bridge' in FL Studio MIDI settings.");
+            return;
+          } catch {
+            setFlBridgeStatus(nextFlBridgeStatus);
+            return;
+          }
+        }
+
+        setFlBridgeStatus(nextFlBridgeStatus);
       })
       .catch(() => {
         setLocalRelayUrls([defaultRelayUrl]);
@@ -190,6 +221,7 @@ function App() {
         setUserDataFolders([]);
         setProjectFolders([]);
         setCustomPluginFolders([]);
+        setFlBridgeStatus(null);
       });
   }, []);
 
@@ -234,6 +266,7 @@ function App() {
   const collaboratorCount = useMemo(() => session?.collaborators.length ?? 0, [session]);
   const hasSharedCompatibility = Boolean(ownCollaboratorId && session?.compatibility[ownCollaboratorId]);
   const bridgeState = session?.bridge ?? { transport: "stopped" as const, tempoBpm: 120 };
+  const canControlBridge = Boolean(window.mixerlink) || (canSend && Boolean(session));
   const compatibilityReports = useMemo(() => {
     if (!session || !ownCollaboratorId) {
       return [];
@@ -325,18 +358,43 @@ function App() {
   }
 
   function sendBridgeOperation(operation: BridgeOperation) {
-    send({
-      type: "bridge.operation",
-      payload: operation
-    });
+    if (socketRef.current?.readyState === WebSocket.OPEN && session) {
+      socketRef.current.send(
+        JSON.stringify({
+          type: "bridge.operation",
+          payload: operation
+        } satisfies ClientMessage)
+      );
+    }
+
     queueBridgeOperationForFl(operation);
   }
 
   async function queueBridgeOperationForFl(operation: BridgeOperation) {
     try {
-      await window.mixerlink?.queueBridgeOperation(operation);
+      const queued = await window.mixerlink?.queueBridgeOperation(operation);
+      setNotice(
+        queued
+          ? `Queued ${operation.type} for FL Studio${session ? " and sent it to the room" : ""}.`
+          : `Sent ${operation.type} to the room.`
+      );
     } catch {
       setNotice("MixerLink could not queue that operation for the local FL bridge.");
+    }
+  }
+
+  async function installFlBridgeScript() {
+    if (!window.mixerlink) {
+      setNotice("FL Studio bridge installation is available in the desktop app.");
+      return;
+    }
+
+    try {
+      const status = await window.mixerlink.installFlBridgeScript();
+      setFlBridgeStatus(status);
+      setNotice("MixerLink Bridge script installed. Select 'MixerLink Bridge' in FL Studio MIDI settings.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "MixerLink could not install the FL Studio bridge script.");
     }
   }
 
@@ -713,13 +771,15 @@ function App() {
           onRevealPath={revealPath}
         />
         <BridgeControlPanel
-          canSend={canSend && Boolean(session)}
+          canControl={canControlBridge}
           bridgeState={bridgeState}
+          flBridgeStatus={flBridgeStatus}
           tempoInput={bridgeTempoInput}
           onTempoInputChange={setBridgeTempoInput}
           onPlay={() => sendBridgeOperation({ type: "transport.play" })}
           onStop={() => sendBridgeOperation({ type: "transport.stop" })}
           onSyncTempo={syncTempo}
+          onInstallBridge={installFlBridgeScript}
         />
         {session ? (
           <div className="session-grid">
@@ -935,21 +995,25 @@ function createBridgeOperationFromState(session: SessionState): BridgeOperation 
 }
 
 function BridgeControlPanel({
-  canSend,
+  canControl,
   bridgeState,
+  flBridgeStatus,
   tempoInput,
   onTempoInputChange,
   onPlay,
   onStop,
-  onSyncTempo
+  onSyncTempo,
+  onInstallBridge
 }: {
-  canSend: boolean;
+  canControl: boolean;
   bridgeState: SessionState["bridge"];
+  flBridgeStatus: FlBridgeStatus | null;
   tempoInput: string;
   onTempoInputChange: (value: string) => void;
   onPlay: () => void;
   onStop: () => void;
   onSyncTempo: () => void;
+  onInstallBridge: () => void;
 }) {
   return (
     <section className="bridge-panel">
@@ -957,11 +1021,24 @@ function BridgeControlPanel({
         <h3>Bridge Sync</h3>
         <span>{bridgeState.transport}</span>
       </div>
+      <div className="bridge-install-row">
+        <div>
+          <strong>{flBridgeStatus?.installed ? "FL script installed" : "FL script not installed"}</strong>
+          <small>
+            {flBridgeStatus?.installed
+              ? flBridgeStatus.installPath
+              : "Install the bundled MIDI script, then select MixerLink Bridge in FL Studio MIDI settings."}
+          </small>
+        </div>
+        <button type="button" className="secondary compact" onClick={onInstallBridge}>
+          {flBridgeStatus?.installed ? "Reinstall" : "Install"}
+        </button>
+      </div>
       <div className="transport-strip">
-        <button type="button" disabled={!canSend} onClick={onPlay}>
+        <button type="button" disabled={!canControl} onClick={onPlay}>
           Play
         </button>
-        <button type="button" className="secondary" disabled={!canSend} onClick={onStop}>
+        <button type="button" className="secondary" disabled={!canControl} onClick={onStop}>
           Stop
         </button>
         <label>
@@ -977,7 +1054,7 @@ function BridgeControlPanel({
                 }
               }}
             />
-            <button type="button" className="secondary" disabled={!canSend} onClick={onSyncTempo}>
+            <button type="button" className="secondary" disabled={!canControl} onClick={onSyncTempo}>
               Sync
             </button>
           </span>
@@ -994,7 +1071,7 @@ function BridgeControlPanel({
         </div>
         <div>
           <dt>Bridge</dt>
-          <dd>{canSend ? "Room relay" : "Waiting"}</dd>
+          <dd>{flBridgeStatus?.installed ? "FL ready" : "Install script"}</dd>
         </div>
       </dl>
     </section>
