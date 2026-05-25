@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const http = require("node:http");
 const os = require("node:os");
@@ -12,6 +13,8 @@ let flBridgeServer;
 let mainWindow;
 let bridgeSequence = 0;
 const bridgeEvents = [];
+let flBridgeFilePollInterval;
+let lastLocalBridgeOperationKey;
 const flBridgeFolderName = "MixerLink";
 const flBridgeScriptName = "device_MixerLink.py";
 const legacyFlBridgeFolderName = "MixerLink Bridge";
@@ -78,6 +81,10 @@ function getBundledFlBridgeScriptPath() {
   return path.join(__dirname, "..", "fl-bridge", flBridgeFolderName, flBridgeScriptName);
 }
 
+function getMidiSenderPath() {
+  return path.join(__dirname, "midi-send.exe");
+}
+
 function getFlBridgeInstallFolder() {
   return path.join(app.getPath("documents"), "Image-Line", "FL Studio", "Settings", "Hardware", flBridgeFolderName);
 }
@@ -98,6 +105,10 @@ function getFlBridgeRuntimePath() {
   return path.join(getFlBridgeDataFolder(), "runtime.json");
 }
 
+function getFlBridgeLocalOperationPath() {
+  return path.join(getFlBridgeDataFolder(), "last-local-operation.json");
+}
+
 function getLegacyFlBridgeInstallPath() {
   return path.join(
     app.getPath("documents"),
@@ -113,9 +124,12 @@ function getLegacyFlBridgeInstallPath() {
 async function getFlBridgeStatus() {
   const installPath = getFlBridgeInstallPath();
   const legacyInstallPath = getLegacyFlBridgeInstallPath();
+  const installed = await pathExists(installPath);
+  const scriptOutdated = installed ? !(await filesMatch(getBundledFlBridgeScriptPath(), installPath)) : false;
 
   return {
-    installed: await pathExists(installPath),
+    installed,
+    scriptOutdated,
     installPath,
     legacyInstalled: await pathExists(legacyInstallPath),
     legacyInstallPath,
@@ -144,6 +158,7 @@ async function installFlBridgeScript() {
 
   return {
     installed: true,
+    scriptOutdated: false,
     installPath,
     legacyInstalled: false,
     legacyInstallPath,
@@ -184,6 +199,23 @@ async function refreshFlBridgeRuntimeFromFile() {
   return getFlBridgeRuntime();
 }
 
+async function refreshFlBridgeLocalOperationFromFile() {
+  try {
+    const raw = await fs.readFile(getFlBridgeLocalOperationPath(), "utf-8");
+    const payload = JSON.parse(raw);
+    const operation = payload?.operation;
+    const createdAt = String(payload?.createdAt ?? "");
+    const operationKey = `${createdAt}:${JSON.stringify(operation)}`;
+
+    if (operationKey && operationKey !== lastLocalBridgeOperationKey && isBridgeOperation(operation)) {
+      lastLocalBridgeOperationKey = operationKey;
+      mainWindow?.webContents.send("bridge:operation-from-fl", operation);
+    }
+  } catch {
+    // The local-operation file is created only after FL Studio changes transport or tempo locally.
+  }
+}
+
 function updateFlBridgeRuntime(payload) {
   const lastSeenAt =
     typeof payload.lastSeenAt === "string" && !Number.isNaN(Date.parse(payload.lastSeenAt))
@@ -207,6 +239,55 @@ async function writeJsonFile(filePath, payload) {
   const tempPath = `${filePath}.tmp`;
   await fs.writeFile(tempPath, JSON.stringify(payload, null, 2));
   await fs.rename(tempPath, filePath);
+}
+
+async function filesMatch(firstPath, secondPath) {
+  try {
+    const [first, second] = await Promise.all([fs.readFile(firstPath), fs.readFile(secondPath)]);
+    return crypto.createHash("sha256").update(first).digest("hex") === crypto.createHash("sha256").update(second).digest("hex");
+  } catch {
+    return false;
+  }
+}
+
+function getMidiMessagesForOperation(operation) {
+  const controlChange = 0xb0;
+
+  if (operation.type === "transport.play") {
+    return [controlChange | (20 << 8) | (1 << 16)];
+  }
+
+  if (operation.type === "transport.stop") {
+    return [controlChange | (20 << 8) | (2 << 16)];
+  }
+
+  if (operation.type === "tempo.changed") {
+    const tempoBpm = Math.max(20, Math.min(300, Number(operation.payload.bpm)));
+    const tempoTenths = Math.round(tempoBpm * 10);
+    const lsb = tempoTenths & 0x7f;
+    const msb = (tempoTenths >> 7) & 0x7f;
+    return [
+      controlChange | (21 << 8) | (lsb << 16),
+      controlChange | (22 << 8) | (msb << 16),
+      controlChange | (20 << 8) | (3 << 16)
+    ];
+  }
+
+  return [controlChange | (20 << 8) | (0 << 16)];
+}
+
+function sendMidiOperation(operation) {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const messages = getMidiMessagesForOperation(operation).map((message) => `0x${message.toString(16).padStart(8, "0")}`);
+  const child = spawn(getMidiSenderPath(), ["MixerLink", ...messages], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.unref();
 }
 
 function getLocalRelayUrls() {
@@ -268,6 +349,8 @@ async function enqueueBridgeOperation(operation, source = "session") {
     latestSequence: bridgeSequence,
     events: bridgeEvents
   });
+
+  sendMidiOperation(operation);
 
   return { ok: true, id: bridgeSequence };
 }
@@ -621,6 +704,10 @@ app.whenReady().then(() => {
   ipcMain.handle("plugin-folders:remove", removeCustomPluginFolder);
   sessionRelay = startSessionRelay(4317);
   flBridgeServer = startFlBridge(4318);
+  flBridgeFilePollInterval = setInterval(() => {
+    refreshFlBridgeRuntimeFromFile().catch(() => undefined);
+    refreshFlBridgeLocalOperationFromFile().catch(() => undefined);
+  }, 1000);
   createWindow();
 
   app.on("activate", () => {
@@ -633,6 +720,9 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   sessionRelay?.close();
   flBridgeServer?.close();
+  if (flBridgeFilePollInterval) {
+    clearInterval(flBridgeFilePollInterval);
+  }
 
   if (process.platform !== "darwin") {
     app.quit();

@@ -12,6 +12,7 @@ declare global {
       queueBridgeOperation: (operation: import("@mixerlink/shared").BridgeOperation) => Promise<{ ok: true; id: number }>;
       getFlBridgeStatus: () => Promise<{
         installed: boolean;
+        scriptOutdated?: boolean;
         installPath: string;
         legacyInstalled?: boolean;
         legacyInstallPath?: string;
@@ -28,6 +29,7 @@ declare global {
       }>;
       installFlBridgeScript: () => Promise<{
         installed: boolean;
+        scriptOutdated?: boolean;
         installPath: string;
         legacyInstalled?: boolean;
         legacyInstallPath?: string;

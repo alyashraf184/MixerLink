@@ -14,6 +14,7 @@ const defaultRelayUrl = "ws://localhost:4317";
 
 type FlBridgeStatus = {
   installed: boolean;
+  scriptOutdated?: boolean;
   installPath: string;
   legacyInstalled?: boolean;
   legacyInstallPath?: string;
@@ -95,6 +96,7 @@ function App() {
   const [bridgeTempoInput, setBridgeTempoInput] = useState("120");
   const [flBridgeStatus, setFlBridgeStatus] = useState<FlBridgeStatus | null>(null);
   const [flBridgeRuntime, setFlBridgeRuntime] = useState<FlBridgeRuntime | null>(null);
+  const [isDetectionOpen, setIsDetectionOpen] = useState(false);
 
   useEffect(() => {
     let isCurrentSocket = true;
@@ -215,12 +217,16 @@ function App() {
         setProjectFolders(nextProjectFolders);
         setCustomPluginFolders(nextPluginFolders);
 
-        if (!nextFlBridgeStatus.installed) {
+        if (!nextFlBridgeStatus.installed || nextFlBridgeStatus.scriptOutdated) {
           try {
             const installedStatus = await mixerlink.installFlBridgeScript();
             setFlBridgeStatus(installedStatus);
             setFlBridgeRuntime(installedStatus.runtime ?? null);
-            setNotice("MixerLink Bridge script installed. Select 'MixerLink Bridge' in FL Studio MIDI settings.");
+            setNotice(
+              nextFlBridgeStatus.scriptOutdated
+                ? "MixerLink Bridge script updated. Restart FL Studio once to load the new bridge."
+                : "MixerLink Bridge script installed. Select 'MixerLink Bridge' in FL Studio MIDI settings."
+            );
             return;
           } catch {
             setFlBridgeStatus(nextFlBridgeStatus);
@@ -643,187 +649,293 @@ function App() {
     window.setTimeout(() => setCopiedSessionCode(false), 1400);
   }
 
+  const sessionControls = (
+    <section className="control-panel">
+      <div className="panel-heading">
+        <h2>{session ? "Room" : "Start"}</h2>
+        <span>{sessionMode}</span>
+      </div>
+      <div className="mode-tabs" role="tablist" aria-label="Session mode">
+        <button
+          type="button"
+          className={`create-tab ${sessionMode === "start" ? "active" : ""}`}
+          role="tab"
+          aria-selected={sessionMode === "start"}
+          onClick={() => setSessionMode("start")}
+        >
+          Create
+        </button>
+        <button
+          type="button"
+          className={`join-tab ${sessionMode === "join" ? "active" : ""}`}
+          role="tab"
+          aria-selected={sessionMode === "join"}
+          onClick={() => setSessionMode("join")}
+        >
+          Join
+        </button>
+      </div>
+      <div className={`mode-content ${isCreatingSession ? "creating" : ""}`} key={sessionMode}>
+        <div className="session-form">
+          <label>
+            Display name
+            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+          </label>
+          <label>
+            Relay address
+            <span className="relay-input-row">
+              <input
+                spellCheck={false}
+                value={relayInput}
+                onChange={(event) => setRelayInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    applyRelayUrl();
+                  }
+                }}
+              />
+              <button type="button" className="secondary compact" onClick={applyRelayUrl}>
+                Connect
+              </button>
+            </span>
+          </label>
+          {localRelayUrls.length > 0 ? (
+            <div className="relay-address-list">
+              <span>Your relay addresses</span>
+              <div>
+                {localRelayUrls.map((url) => (
+                  <button
+                    type="button"
+                    className={url === relayUrl ? "active" : ""}
+                    key={url}
+                    onClick={() => {
+                      setRelayInput(url);
+                      setRelayUrl(url);
+                    }}
+                    onDoubleClick={() => copyRelayUrl(url)}
+                    title="Click to use this relay. Double-click to copy it."
+                  >
+                    {url}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {(sessionMode === "join" || session) ? (
+            <label>
+              Session code
+              <span className="code-input-row">
+                <input
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="123456"
+                  readOnly={sessionMode === "start" && Boolean(session)}
+                  value={session?.code ?? joinCode}
+                  onChange={(event) => setJoinCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                />
+                {session ? (
+                  <button
+                    type="button"
+                    className="copy-icon-button"
+                    aria-label={copiedSessionCode ? "Session code copied" : "Copy session code"}
+                    title={copiedSessionCode ? "Copied" : "Copy session code"}
+                    onClick={copySessionCode}
+                  >
+                    <span aria-hidden="true" />
+                  </button>
+                ) : null}
+              </span>
+            </label>
+          ) : null}
+        </div>
+        <div className="actions">
+          {sessionMode === "start" ? (
+            <button
+              type="button"
+              className={isCreatingSession ? "starting-session" : ""}
+              disabled={!canSend || isCreatingSession}
+              onClick={createSession}
+            >
+              {isCreatingSession ? "Creating..." : "Start Session"}
+            </button>
+          ) : (
+            <button type="button" disabled={!canSend || joinCode.length !== 6} onClick={joinSession}>
+              Join Session
+            </button>
+          )}
+          <button
+            type="button"
+            className="secondary"
+            disabled={isScanningCompatibility}
+            onClick={scanLocalCompatibility}
+          >
+            {isScanningCompatibility ? "Scanning..." : "Scan Local Setup"}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!canSend || !session || isScanningCompatibility}
+            onClick={shareCompatibility}
+          >
+            {isScanningCompatibility
+              ? "Scanning..."
+              : hasSharedCompatibility
+                ? "Refresh Compatibility"
+                : "Share Compatibility"}
+          </button>
+          {session ? (
+            <button type="button" className="secondary danger" disabled={!canSend} onClick={leaveSession}>
+              Leave Session
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+
+  const detectionPanel = (
+    <aside className={`folder-panel detection-drawer ${isDetectionOpen ? "open" : ""}`} aria-hidden={!isDetectionOpen}>
+      <div className="panel-heading">
+        <h2>Detection</h2>
+        <button type="button" className="secondary compact" onClick={() => setIsDetectionOpen(false)}>
+          Close
+        </button>
+      </div>
+      <div className="folder-manager">
+        <FolderPicker
+          title="FL Studio"
+          emptyText="No custom FL Studio folders added."
+          folders={customFlStudioFolders}
+          addLabel="Add FL Studio Folder"
+          onAdd={addFlStudioFolder}
+          onRemove={removeFlStudioFolder}
+        />
+        <FolderPicker
+          title="User data"
+          emptyText="No user data folders added."
+          folders={userDataFolders}
+          addLabel="Add User Data Folder"
+          onAdd={addUserDataFolder}
+          onRemove={removeUserDataFolder}
+        />
+        <FolderPicker
+          title="Projects"
+          emptyText="No project folders added."
+          folders={projectFolders}
+          addLabel="Add Project Folder"
+          onAdd={addProjectFolder}
+          onRemove={removeProjectFolder}
+        />
+        <FolderPicker
+          title="Plugins"
+          emptyText="No custom plugin folders added."
+          folders={customPluginFolders}
+          addLabel="Add Plugin Folder"
+          onAdd={addPluginFolder}
+          onRemove={removePluginFolder}
+        />
+      </div>
+    </aside>
+  );
+
+  if (!session) {
+    return (
+      <main className="app-shell lobby-mode">
+        <div className="animated-stage" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <section className="lobby-layout">
+          <div className="lobby-hero">
+            <p className="eyebrow logo-wordmark">MixerLink</p>
+            <h1>Collaborative control for FL Studio sessions</h1>
+            <p className="lobby-copy">Create a room, connect FL Studio, and keep transport and compatibility in one focused workspace.</p>
+            <div className="lobby-status-row">
+              <span className={`connection-pill ${connectionStatus}`}>{connectionStatus}</span>
+              <span>{flBridgeStatus?.installed ? "MIDI bridge ready" : "FL bridge pending"}</span>
+            </div>
+          </div>
+          <div className="lobby-card">
+            {sessionControls}
+          </div>
+          <div className="lobby-side">
+            <p className="notice-line">{notice}</p>
+            <LocalIntegrationPanel
+              snapshot={localSnapshot}
+              isScanning={isScanningCompatibility}
+              onScan={scanLocalCompatibility}
+              onLaunchFlStudio={launchFlStudio}
+              onOpenProject={openProject}
+              onRevealPath={revealPath}
+            />
+            <button type="button" className="secondary" onClick={() => setIsDetectionOpen(true)}>
+              Detection Folders
+            </button>
+          </div>
+        </section>
+        {isDetectionOpen ? <button type="button" className="drawer-backdrop" aria-label="Close detection" onClick={() => setIsDetectionOpen(false)} /> : null}
+        {detectionPanel}
+      </main>
+    );
+  }
+
   return (
-    <main className="app-shell">
+    <main className="app-shell session-mode">
+      <div className="animated-stage" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
       <header className="app-header">
         <div className="top-line">
           <div>
-            <p className="eyebrow">MixerLink</p>
-            <h1>Session control for FL Studio collaboration</h1>
+            <p className="eyebrow logo-wordmark">MixerLink</p>
+            <h1>Room {session.code}</h1>
           </div>
           <div className="header-status">
             <span className={`connection-pill ${connectionStatus}`}>{connectionStatus}</span>
-            <span>{session ? `Room ${session.code}` : "No active room"}</span>
+            <span>{collaboratorCount} connected</span>
+            <button type="button" className="secondary compact" onClick={() => setIsDetectionOpen(true)}>
+              Detection
+            </button>
           </div>
         </div>
       </header>
-      <div className="dashboard-grid">
-      <section className="control-panel">
-        <div className="panel-heading">
-          <h2>Session</h2>
-          <span>{sessionMode}</span>
-        </div>
-        <div className="mode-tabs" role="tablist" aria-label="Session mode">
-          <button
-            type="button"
-            className={`create-tab ${sessionMode === "start" ? "active" : ""}`}
-            role="tab"
-            aria-selected={sessionMode === "start"}
-            onClick={() => setSessionMode("start")}
-          >
-            Create
-          </button>
-          <button
-            type="button"
-            className={`join-tab ${sessionMode === "join" ? "active" : ""}`}
-            role="tab"
-            aria-selected={sessionMode === "join"}
-            onClick={() => setSessionMode("join")}
-          >
-            Join
-          </button>
-        </div>
-        <div className={`mode-content ${isCreatingSession ? "creating" : ""}`} key={sessionMode}>
-          <div className="session-form">
-            <label>
-              Display name
-              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
-            </label>
-            <label>
-              Relay address
-              <span className="relay-input-row">
-                <input
-                  spellCheck={false}
-                  value={relayInput}
-                  onChange={(event) => setRelayInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      applyRelayUrl();
-                    }
-                  }}
-                />
-                <button type="button" className="secondary compact" onClick={applyRelayUrl}>
-                  Connect
-                </button>
-              </span>
-            </label>
-            {localRelayUrls.length > 0 ? (
-              <div className="relay-address-list">
-                <span>Your relay addresses</span>
-                <div>
-                  {localRelayUrls.map((url) => (
-                    <button
-                      type="button"
-                      className={url === relayUrl ? "active" : ""}
-                      key={url}
-                      onClick={() => {
-                        setRelayInput(url);
-                        setRelayUrl(url);
-                      }}
-                      onDoubleClick={() => copyRelayUrl(url)}
-                      title="Click to use this relay. Double-click to copy it."
-                    >
-                      {url}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {(sessionMode === "join" || session) ? (
-              <label>
-                Session code
-                <span className="code-input-row">
-                  <input
-                    inputMode="numeric"
-                    maxLength={6}
-                    placeholder="123456"
-                    readOnly={sessionMode === "start" && Boolean(session)}
-                    value={session?.code ?? joinCode}
-                    onChange={(event) => setJoinCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                  />
-                  {session ? (
-                    <button
-                      type="button"
-                      className="copy-icon-button"
-                      aria-label={copiedSessionCode ? "Session code copied" : "Copy session code"}
-                      title={copiedSessionCode ? "Copied" : "Copy session code"}
-                      onClick={copySessionCode}
-                    >
-                      <span aria-hidden="true" />
-                    </button>
-                  ) : null}
-                </span>
-              </label>
-            ) : null}
+      <div className="session-workspace">
+        <aside className="session-rail">
+          {sessionControls}
+        </aside>
+        <section className="status-panel session-live">
+          <div className="panel-heading">
+            <h2>Session Workspace</h2>
+            <span>{Object.keys(session.compatibility).length} shared</span>
           </div>
-          <div className="actions">
-            {sessionMode === "start" ? (
-              <button
-                type="button"
-                className={isCreatingSession ? "starting-session" : ""}
-                disabled={!canSend || isCreatingSession}
-                onClick={createSession}
-              >
-                {isCreatingSession ? "Creating..." : "Start Session"}
-              </button>
-            ) : (
-              <button type="button" disabled={!canSend || joinCode.length !== 6} onClick={joinSession}>
-                Join Session
-              </button>
-            )}
-            <button
-              type="button"
-              className="secondary"
-              disabled={isScanningCompatibility}
-              onClick={scanLocalCompatibility}
-            >
-              {isScanningCompatibility ? "Scanning..." : "Scan Local Setup"}
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              disabled={!canSend || !session || isScanningCompatibility}
-              onClick={shareCompatibility}
-            >
-              {isScanningCompatibility
-                ? "Scanning..."
-                : hasSharedCompatibility
-                  ? "Refresh Compatibility"
-                  : "Share Compatibility"}
-            </button>
-            <button type="button" className="secondary danger" disabled={!canSend || !session} onClick={leaveSession}>
-              Leave Session
-            </button>
+          <p className="notice-line">{notice}</p>
+          <div className="session-panels">
+            <LocalIntegrationPanel
+              snapshot={localSnapshot}
+              isScanning={isScanningCompatibility}
+              onScan={scanLocalCompatibility}
+              onLaunchFlStudio={launchFlStudio}
+              onOpenProject={openProject}
+              onRevealPath={revealPath}
+            />
+            <BridgeControlPanel
+              canControl={canControlBridge}
+              bridgeState={bridgeState}
+              flBridgeStatus={flBridgeStatus}
+              flBridgeRuntime={flBridgeRuntime}
+              tempoInput={bridgeTempoInput}
+              onTempoInputChange={setBridgeTempoInput}
+              onPlay={() => sendBridgeOperation({ type: "transport.play" })}
+              onStop={() => sendBridgeOperation({ type: "transport.stop" })}
+              onSyncTempo={syncTempo}
+              onInstallBridge={installFlBridgeScript}
+            />
           </div>
-        </div>
-      </section>
-      <section className={`status-panel ${session ? "session-live" : ""}`}>
-        <div className="panel-heading">
-          <h2>{session ? `Session ${session.code}` : "Workspace"}</h2>
-          <span>{collaboratorCount} connected</span>
-        </div>
-        <p className="notice-line">{notice}</p>
-        <LocalIntegrationPanel
-          snapshot={localSnapshot}
-          isScanning={isScanningCompatibility}
-          onScan={scanLocalCompatibility}
-          onLaunchFlStudio={launchFlStudio}
-          onOpenProject={openProject}
-          onRevealPath={revealPath}
-        />
-        <BridgeControlPanel
-          canControl={canControlBridge}
-          bridgeState={bridgeState}
-          flBridgeStatus={flBridgeStatus}
-          flBridgeRuntime={flBridgeRuntime}
-          tempoInput={bridgeTempoInput}
-          onTempoInputChange={setBridgeTempoInput}
-          onPlay={() => sendBridgeOperation({ type: "transport.play" })}
-          onStop={() => sendBridgeOperation({ type: "transport.stop" })}
-          onSyncTempo={syncTempo}
-          onInstallBridge={installFlBridgeScript}
-        />
-        {session ? (
           <div className="session-grid">
             <section className="session-section">
               <div className="section-heading">
@@ -971,51 +1083,13 @@ function App() {
               </ol>
             </section>
           </div>
-        ) : null}
-      </section>
-      <aside className="folder-panel">
-        <div className="panel-heading">
-          <h2>Detection</h2>
-          <span>folders</span>
-        </div>
-        <div className="folder-manager">
-          <FolderPicker
-            title="FL Studio"
-            emptyText="No custom FL Studio folders added."
-            folders={customFlStudioFolders}
-            addLabel="Add FL Studio Folder"
-            onAdd={addFlStudioFolder}
-            onRemove={removeFlStudioFolder}
-          />
-          <FolderPicker
-            title="User data"
-            emptyText="No user data folders added."
-            folders={userDataFolders}
-            addLabel="Add User Data Folder"
-            onAdd={addUserDataFolder}
-            onRemove={removeUserDataFolder}
-          />
-          <FolderPicker
-            title="Projects"
-            emptyText="No project folders added."
-            folders={projectFolders}
-            addLabel="Add Project Folder"
-            onAdd={addProjectFolder}
-            onRemove={removeProjectFolder}
-          />
-          <FolderPicker
-            title="Plugins"
-            emptyText="No custom plugin folders added."
-            folders={customPluginFolders}
-            addLabel="Add Plugin Folder"
-            onAdd={addPluginFolder}
-            onRemove={removePluginFolder}
-          />
-        </div>
-      </aside>
+        </section>
       </div>
+      {isDetectionOpen ? <button type="button" className="drawer-backdrop" aria-label="Close detection" onClick={() => setIsDetectionOpen(false)} /> : null}
+      {detectionPanel}
     </main>
   );
+
 }
 
 function createBridgeOperationFromState(session: SessionState): BridgeOperation | undefined {
@@ -1060,12 +1134,14 @@ function BridgeControlPanel({
   onInstallBridge: () => void;
 }) {
   const flConnected = Boolean(flBridgeRuntime?.connected);
+  const midiReady = Boolean(flBridgeStatus?.installed);
+  const bridgeStatusLabel = flConnected ? "FL online" : midiReady ? "MIDI ready" : "FL offline";
 
   return (
     <section className="bridge-panel">
       <div className="section-heading">
         <h3>Bridge Sync</h3>
-        <span>{flConnected ? "FL online" : "FL offline"}</span>
+        <span>{bridgeStatusLabel}</span>
       </div>
       <div className="bridge-install-row">
         <div>
@@ -1073,14 +1149,14 @@ function BridgeControlPanel({
             {flConnected
               ? `FL Studio connected${typeof flBridgeRuntime?.tempoBpm === "number" ? ` at ${flBridgeRuntime.tempoBpm} BPM` : ""}`
               : flBridgeStatus?.installed
-                ? "Waiting for FL Studio"
+                ? "MIDI bridge ready"
                 : "FL script not installed"}
           </strong>
           <small>
             {flConnected
               ? `Loaded script: ${flBridgeRuntime?.script ?? "MixerLink Bridge"}`
               : flBridgeStatus?.installed
-                ? "Open FL Studio MIDI settings, enable an input, and set Controller type to MixerLink Bridge."
+                ? "Commands are sent directly over the MixerLink loopMIDI port."
                 : "Install the bundled MIDI script, restart FL Studio, then select MixerLink Bridge in MIDI settings."}
           </small>
         </div>
@@ -1125,7 +1201,7 @@ function BridgeControlPanel({
         </div>
         <div>
           <dt>Bridge</dt>
-          <dd>{flConnected ? "FL online" : flBridgeStatus?.installed ? "Waiting" : "Install"}</dd>
+          <dd>{flConnected ? "FL online" : midiReady ? "MIDI" : "Install"}</dd>
         </div>
       </dl>
     </section>
