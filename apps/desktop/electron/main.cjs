@@ -12,8 +12,17 @@ let flBridgeServer;
 let mainWindow;
 let bridgeSequence = 0;
 const bridgeEvents = [];
-const flBridgeFolderName = "MixerLink Bridge";
-const flBridgeScriptName = "device_MixerLink Bridge.py";
+const flBridgeFolderName = "MixerLink";
+const flBridgeScriptName = "device_MixerLink.py";
+const legacyFlBridgeFolderName = "MixerLink Bridge";
+const legacyFlBridgeScriptName = "device_MixerLink Bridge.py";
+let flBridgeRuntime = {
+  connected: false,
+  lastSeenAt: undefined,
+  playing: undefined,
+  tempoBpm: undefined,
+  script: undefined
+};
 
 const { startSessionRelay } = require("./session-relay.cjs");
 
@@ -77,13 +86,29 @@ function getFlBridgeInstallPath() {
   return path.join(getFlBridgeInstallFolder(), flBridgeScriptName);
 }
 
+function getLegacyFlBridgeInstallPath() {
+  return path.join(
+    app.getPath("documents"),
+    "Image-Line",
+    "FL Studio",
+    "Settings",
+    "Hardware",
+    legacyFlBridgeFolderName,
+    legacyFlBridgeScriptName
+  );
+}
+
 async function getFlBridgeStatus() {
   const installPath = getFlBridgeInstallPath();
+  const legacyInstallPath = getLegacyFlBridgeInstallPath();
 
   return {
     installed: await pathExists(installPath),
     installPath,
-    bridgeUrl: "http://127.0.0.1:4318"
+    legacyInstalled: await pathExists(legacyInstallPath),
+    legacyInstallPath,
+    bridgeUrl: "http://127.0.0.1:4318",
+    runtime: getFlBridgeRuntime()
   };
 }
 
@@ -91,6 +116,8 @@ async function installFlBridgeScript() {
   const sourcePath = getBundledFlBridgeScriptPath();
   const installFolder = getFlBridgeInstallFolder();
   const installPath = getFlBridgeInstallPath();
+  const legacyInstallFolder = path.dirname(getLegacyFlBridgeInstallPath());
+  const legacyInstallPath = getLegacyFlBridgeInstallPath();
 
   if (!(await pathExists(sourcePath))) {
     throw new Error("Bundled MixerLink FL Studio bridge script was not found.");
@@ -98,12 +125,40 @@ async function installFlBridgeScript() {
 
   await fs.mkdir(installFolder, { recursive: true });
   await fs.copyFile(sourcePath, installPath);
+  await fs.rm(legacyInstallPath, { force: true }).catch(() => undefined);
+  await fs.rmdir(legacyInstallFolder).catch(() => undefined);
 
   return {
     installed: true,
     installPath,
-    bridgeUrl: "http://127.0.0.1:4318"
+    legacyInstalled: false,
+    legacyInstallPath,
+    bridgeUrl: "http://127.0.0.1:4318",
+    runtime: getFlBridgeRuntime()
   };
+}
+
+function getFlBridgeRuntime() {
+  const lastSeenTime = flBridgeRuntime.lastSeenAt ? Date.parse(flBridgeRuntime.lastSeenAt) : 0;
+  const connected = Boolean(lastSeenTime && Date.now() - lastSeenTime < 5000);
+
+  return {
+    ...flBridgeRuntime,
+    connected
+  };
+}
+
+function updateFlBridgeRuntime(payload) {
+  flBridgeRuntime = {
+    connected: true,
+    lastSeenAt: new Date().toISOString(),
+    playing: typeof payload.playing === "boolean" ? payload.playing : flBridgeRuntime.playing,
+    tempoBpm: Number.isFinite(Number(payload.tempoBpm)) ? Math.round(Number(payload.tempoBpm) * 10) / 10 : flBridgeRuntime.tempoBpm,
+    script: typeof payload.script === "string" ? payload.script : flBridgeRuntime.script
+  };
+
+  mainWindow?.webContents.send("fl-bridge:runtime", getFlBridgeRuntime());
+  return getFlBridgeRuntime();
 }
 
 function getLocalRelayUrls() {
@@ -208,7 +263,8 @@ function startFlBridge(port) {
           app: "MixerLink",
           bridge: "fl-studio-local",
           latestSequence: bridgeSequence,
-          queuedEvents: bridgeEvents.length
+          queuedEvents: bridgeEvents.length,
+          flStudio: getFlBridgeRuntime()
         });
         return;
       }
@@ -217,7 +273,18 @@ function startFlBridge(port) {
         writeJson(response, 200, {
           app: "MixerLink",
           bridge: "fl-studio-local",
-          latestSequence: bridgeSequence
+          latestSequence: bridgeSequence,
+          queuedEvents: bridgeEvents.length,
+          flStudio: getFlBridgeRuntime()
+        });
+        return;
+      }
+
+      if (request.method === "POST" && (url.pathname === "/fl/hello" || url.pathname === "/fl/state")) {
+        const body = await readRequestJson(request);
+        writeJson(response, 200, {
+          ok: true,
+          runtime: updateFlBridgeRuntime(body)
         });
         return;
       }
@@ -484,6 +551,7 @@ app.whenReady().then(() => {
   ipcMain.handle("bridge:queue-operation", (_event, operation) => enqueueBridgeOperation(operation));
   ipcMain.handle("fl-bridge:status", getFlBridgeStatus);
   ipcMain.handle("fl-bridge:install", installFlBridgeScript);
+  ipcMain.handle("fl-bridge:runtime", getFlBridgeRuntime);
   ipcMain.handle("relay-urls:get", getLocalRelayUrls);
   ipcMain.handle("fl-studio-folders:get", getCustomFlStudioFolders);
   ipcMain.handle("fl-studio-folders:add", addCustomFlStudioFolder);

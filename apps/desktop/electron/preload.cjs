@@ -8,6 +8,12 @@ contextBridge.exposeInMainWorld("mixerlink", {
   queueBridgeOperation: (operation) => ipcRenderer.invoke("bridge:queue-operation", operation),
   getFlBridgeStatus: () => ipcRenderer.invoke("fl-bridge:status"),
   installFlBridgeScript: () => ipcRenderer.invoke("fl-bridge:install"),
+  getFlBridgeRuntime: () => ipcRenderer.invoke("fl-bridge:runtime"),
+  onFlBridgeRuntime: (callback) => {
+    const listener = (_event, runtime) => callback(runtime);
+    ipcRenderer.on("fl-bridge:runtime", listener);
+    return () => ipcRenderer.removeListener("fl-bridge:runtime", listener);
+  },
   onBridgeOperationFromFl: (callback) => {
     const listener = (_event, operation) => callback(operation);
     ipcRenderer.on("bridge:operation-from-fl", listener);

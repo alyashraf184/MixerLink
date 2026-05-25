@@ -13,16 +13,18 @@ import ui
 BRIDGE_URL = "http://127.0.0.1:4318"
 POLL_INTERVAL_SECONDS = 0.2
 POST_INTERVAL_SECONDS = 0.25
+HTTP_TIMEOUT_SECONDS = 0.35
 
 last_event_id = 0
 last_poll_at = 0
 last_post_at = 0
+last_hello_at = 0
 last_playing = None
 last_tempo = None
 applying_remote = False
 
 
-def _request_json(method, path, payload=None, timeout=0.08):
+def _request_json(method, path, payload=None):
     data = None
     headers = {"Content-Type": "application/json"}
 
@@ -31,9 +33,43 @@ def _request_json(method, path, payload=None, timeout=0.08):
 
     request = urllib.request.Request(BRIDGE_URL + path, data=data, headers=headers, method=method)
 
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
         raw = response.read().decode("utf-8")
         return json.loads(raw) if raw else {}
+
+
+def _safe_request(method, path, payload=None):
+    try:
+        return _request_json(method, path, payload)
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError, TypeError):
+        return None
+
+
+def _current_state():
+    return {
+        "playing": bool(transport.isPlaying()),
+        "tempoBpm": round(float(mixer.getCurrentTempo()), 1),
+    }
+
+
+def _send_hello(force=False):
+    global last_hello_at
+
+    now = time.time()
+    if not force and now - last_hello_at < 2.0:
+        return
+
+    last_hello_at = now
+    state = _current_state()
+    _safe_request(
+        "POST",
+        "/fl/hello",
+        {
+            "script": "MixerLink Bridge",
+            "playing": state["playing"],
+            "tempoBpm": state["tempoBpm"],
+        },
+    )
 
 
 def _apply_operation(operation):
@@ -44,7 +80,8 @@ def _apply_operation(operation):
 
     try:
         if operation_type == "transport.play":
-            transport.start()
+            if not bool(transport.isPlaying()):
+                transport.start()
             last_playing = True
             ui.setHintMsg("MixerLink: play")
         elif operation_type == "transport.stop":
@@ -64,7 +101,9 @@ def _apply_operation(operation):
 def _poll_mixerlink():
     global last_event_id
 
-    payload = _request_json("GET", "/events?after=%s" % last_event_id)
+    payload = _safe_request("GET", "/events?after=%s" % last_event_id)
+    if not payload:
+        return
 
     for event in payload.get("events", []):
         event_id = int(event.get("id", 0))
@@ -78,7 +117,12 @@ def _poll_mixerlink():
 
 
 def _post_operation(operation):
-    _request_json("POST", "/operation", {"operation": operation})
+    _safe_request("POST", "/operation", {"operation": operation})
+
+
+def _post_state():
+    state = _current_state()
+    _safe_request("POST", "/fl/state", state)
 
 
 def _detect_local_changes():
@@ -91,8 +135,9 @@ def _detect_local_changes():
     if now - last_post_at < POST_INTERVAL_SECONDS:
         return
 
-    playing = bool(transport.isPlaying())
-    tempo = round(float(mixer.getCurrentTempo()), 1)
+    state = _current_state()
+    playing = state["playing"]
+    tempo = state["tempoBpm"]
 
     if last_playing is None:
         last_playing = playing
@@ -104,19 +149,23 @@ def _detect_local_changes():
         last_playing = playing
         last_post_at = now
         _post_operation({"type": "transport.play" if playing else "transport.stop"})
+        _post_state()
         return
 
     if abs(tempo - last_tempo) >= 0.1:
         last_tempo = tempo
         last_post_at = now
         _post_operation({"type": "tempo.changed", "payload": {"bpm": tempo}})
+        _post_state()
 
 
 def OnInit():
     global last_playing, last_tempo
 
-    last_playing = bool(transport.isPlaying())
-    last_tempo = round(float(mixer.getCurrentTempo()), 1)
+    state = _current_state()
+    last_playing = state["playing"]
+    last_tempo = state["tempoBpm"]
+    _send_hello(True)
     ui.setHintMsg("MixerLink Bridge ready")
 
 
@@ -125,11 +174,10 @@ def OnIdle():
 
     now = time.time()
 
-    try:
-        if now - last_poll_at >= POLL_INTERVAL_SECONDS:
-            last_poll_at = now
-            _poll_mixerlink()
+    _send_hello(False)
 
-        _detect_local_changes()
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError, TypeError):
-        return
+    if now - last_poll_at >= POLL_INTERVAL_SECONDS:
+        last_poll_at = now
+        _poll_mixerlink()
+
+    _detect_local_changes()

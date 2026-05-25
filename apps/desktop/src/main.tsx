@@ -15,7 +15,18 @@ const defaultRelayUrl = "ws://localhost:4317";
 type FlBridgeStatus = {
   installed: boolean;
   installPath: string;
+  legacyInstalled?: boolean;
+  legacyInstallPath?: string;
   bridgeUrl: string;
+  runtime?: FlBridgeRuntime;
+};
+
+type FlBridgeRuntime = {
+  connected: boolean;
+  lastSeenAt?: string;
+  playing?: boolean;
+  tempoBpm?: number;
+  script?: string;
 };
 
 const mockCompatibilitySnapshot: CompatibilitySnapshot = {
@@ -81,6 +92,7 @@ function App() {
   const [localSnapshot, setLocalSnapshot] = useState<CompatibilitySnapshot | null>(null);
   const [bridgeTempoInput, setBridgeTempoInput] = useState("120");
   const [flBridgeStatus, setFlBridgeStatus] = useState<FlBridgeStatus | null>(null);
+  const [flBridgeRuntime, setFlBridgeRuntime] = useState<FlBridgeRuntime | null>(null);
 
   useEffect(() => {
     let isCurrentSocket = true;
@@ -205,15 +217,18 @@ function App() {
           try {
             const installedStatus = await mixerlink.installFlBridgeScript();
             setFlBridgeStatus(installedStatus);
+            setFlBridgeRuntime(installedStatus.runtime ?? null);
             setNotice("MixerLink Bridge script installed. Select 'MixerLink Bridge' in FL Studio MIDI settings.");
             return;
           } catch {
             setFlBridgeStatus(nextFlBridgeStatus);
+            setFlBridgeRuntime(nextFlBridgeStatus.runtime ?? null);
             return;
           }
         }
 
         setFlBridgeStatus(nextFlBridgeStatus);
+        setFlBridgeRuntime(nextFlBridgeStatus.runtime ?? null);
       })
       .catch(() => {
         setLocalRelayUrls([defaultRelayUrl]);
@@ -222,7 +237,30 @@ function App() {
         setProjectFolders([]);
         setCustomPluginFolders([]);
         setFlBridgeStatus(null);
+        setFlBridgeRuntime(null);
       });
+  }, []);
+
+  useEffect(() => {
+    if (!window.mixerlink?.onFlBridgeRuntime) {
+      return;
+    }
+
+    return window.mixerlink.onFlBridgeRuntime((runtime) => {
+      setFlBridgeRuntime(runtime);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!window.mixerlink?.getFlBridgeRuntime) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      window.mixerlink?.getFlBridgeRuntime().then(setFlBridgeRuntime).catch(() => undefined);
+    }, 1500);
+
+    return () => window.clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -392,6 +430,7 @@ function App() {
     try {
       const status = await window.mixerlink.installFlBridgeScript();
       setFlBridgeStatus(status);
+      setFlBridgeRuntime(status.runtime ?? null);
       setNotice("MixerLink Bridge script installed. Select 'MixerLink Bridge' in FL Studio MIDI settings.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "MixerLink could not install the FL Studio bridge script.");
@@ -774,6 +813,7 @@ function App() {
           canControl={canControlBridge}
           bridgeState={bridgeState}
           flBridgeStatus={flBridgeStatus}
+          flBridgeRuntime={flBridgeRuntime}
           tempoInput={bridgeTempoInput}
           onTempoInputChange={setBridgeTempoInput}
           onPlay={() => sendBridgeOperation({ type: "transport.play" })}
@@ -998,6 +1038,7 @@ function BridgeControlPanel({
   canControl,
   bridgeState,
   flBridgeStatus,
+  flBridgeRuntime,
   tempoInput,
   onTempoInputChange,
   onPlay,
@@ -1008,6 +1049,7 @@ function BridgeControlPanel({
   canControl: boolean;
   bridgeState: SessionState["bridge"];
   flBridgeStatus: FlBridgeStatus | null;
+  flBridgeRuntime: FlBridgeRuntime | null;
   tempoInput: string;
   onTempoInputChange: (value: string) => void;
   onPlay: () => void;
@@ -1015,19 +1057,29 @@ function BridgeControlPanel({
   onSyncTempo: () => void;
   onInstallBridge: () => void;
 }) {
+  const flConnected = Boolean(flBridgeRuntime?.connected);
+
   return (
     <section className="bridge-panel">
       <div className="section-heading">
         <h3>Bridge Sync</h3>
-        <span>{bridgeState.transport}</span>
+        <span>{flConnected ? "FL online" : "FL offline"}</span>
       </div>
       <div className="bridge-install-row">
         <div>
-          <strong>{flBridgeStatus?.installed ? "FL script installed" : "FL script not installed"}</strong>
+          <strong>
+            {flConnected
+              ? `FL Studio connected${typeof flBridgeRuntime?.tempoBpm === "number" ? ` at ${flBridgeRuntime.tempoBpm} BPM` : ""}`
+              : flBridgeStatus?.installed
+                ? "Waiting for FL Studio"
+                : "FL script not installed"}
+          </strong>
           <small>
-            {flBridgeStatus?.installed
-              ? flBridgeStatus.installPath
-              : "Install the bundled MIDI script, then select MixerLink Bridge in FL Studio MIDI settings."}
+            {flConnected
+              ? `Loaded script: ${flBridgeRuntime?.script ?? "MixerLink Bridge"}`
+              : flBridgeStatus?.installed
+                ? "Open FL Studio MIDI settings, enable an input, and set Controller type to MixerLink Bridge."
+                : "Install the bundled MIDI script, restart FL Studio, then select MixerLink Bridge in MIDI settings."}
           </small>
         </div>
         <button type="button" className="secondary compact" onClick={onInstallBridge}>
@@ -1071,7 +1123,7 @@ function BridgeControlPanel({
         </div>
         <div>
           <dt>Bridge</dt>
-          <dd>{flBridgeStatus?.installed ? "FL ready" : "Install script"}</dd>
+          <dd>{flConnected ? "FL online" : flBridgeStatus?.installed ? "Waiting" : "Install"}</dd>
         </div>
       </dl>
     </section>

@@ -10,8 +10,50 @@ declare global {
       openProjectInFlStudio: (request: { projectPath: string; executablePath?: string }) => Promise<{ ok: true }>;
       revealPath: (targetPath: string) => Promise<{ ok: true }>;
       queueBridgeOperation: (operation: import("@mixerlink/shared").BridgeOperation) => Promise<{ ok: true; id: number }>;
-      getFlBridgeStatus: () => Promise<{ installed: boolean; installPath: string; bridgeUrl: string }>;
-      installFlBridgeScript: () => Promise<{ installed: boolean; installPath: string; bridgeUrl: string }>;
+      getFlBridgeStatus: () => Promise<{
+        installed: boolean;
+        installPath: string;
+        legacyInstalled?: boolean;
+        legacyInstallPath?: string;
+        bridgeUrl: string;
+        runtime?: {
+          connected: boolean;
+          lastSeenAt?: string;
+          playing?: boolean;
+          tempoBpm?: number;
+          script?: string;
+        };
+      }>;
+      installFlBridgeScript: () => Promise<{
+        installed: boolean;
+        installPath: string;
+        legacyInstalled?: boolean;
+        legacyInstallPath?: string;
+        bridgeUrl: string;
+        runtime?: {
+          connected: boolean;
+          lastSeenAt?: string;
+          playing?: boolean;
+          tempoBpm?: number;
+          script?: string;
+        };
+      }>;
+      getFlBridgeRuntime: () => Promise<{
+        connected: boolean;
+        lastSeenAt?: string;
+        playing?: boolean;
+        tempoBpm?: number;
+        script?: string;
+      }>;
+      onFlBridgeRuntime: (
+        callback: (runtime: {
+          connected: boolean;
+          lastSeenAt?: string;
+          playing?: boolean;
+          tempoBpm?: number;
+          script?: string;
+        }) => void
+      ) => () => void;
       onBridgeOperationFromFl: (
         callback: (operation: import("@mixerlink/shared").BridgeOperation) => void
       ) => () => void;
