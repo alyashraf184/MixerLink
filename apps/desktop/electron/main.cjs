@@ -188,6 +188,7 @@ function createWindow() {
     }
   });
   mainWindow = window;
+  window.maximize();
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);

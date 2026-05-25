@@ -393,12 +393,21 @@ function App() {
         <span className="stars stars-medium" />
         <span className="stars stars-large" />
       </div>
-      <section className="hero">
+      <header className="app-header">
         <div className="top-line">
-          <p className="eyebrow">MixerLink</p>
+          <div>
+            <p className="eyebrow">MixerLink</p>
+            <h1>Live collaboration for FL Studio sessions.</h1>
+          </div>
           <span className={`connection-pill ${connectionStatus}`}>{connectionStatus}</span>
         </div>
-        <h1>Live collaboration for FL Studio sessions.</h1>
+      </header>
+      <div className="dashboard-grid">
+      <section className="control-panel">
+        <div className="panel-heading">
+          <h2>Session</h2>
+          <span>{sessionMode}</span>
+        </div>
         <div className="mode-tabs" role="tablist" aria-label="Session mode">
           <button
             type="button"
@@ -522,40 +531,6 @@ function App() {
             <button type="button" className="secondary danger" disabled={!canSend || !session} onClick={leaveSession}>
               Leave Session
             </button>
-          </div>
-          <div className="folder-manager">
-            <FolderPicker
-              title="FL Studio"
-              emptyText="No custom FL Studio folders added."
-              folders={customFlStudioFolders}
-              addLabel="Add FL Studio Folder"
-              onAdd={addFlStudioFolder}
-              onRemove={removeFlStudioFolder}
-            />
-            <FolderPicker
-              title="User data"
-              emptyText="No user data folders added."
-              folders={userDataFolders}
-              addLabel="Add User Data Folder"
-              onAdd={addUserDataFolder}
-              onRemove={removeUserDataFolder}
-            />
-            <FolderPicker
-              title="Projects"
-              emptyText="No project folders added."
-              folders={projectFolders}
-              addLabel="Add Project Folder"
-              onAdd={addProjectFolder}
-              onRemove={removeProjectFolder}
-            />
-            <FolderPicker
-              title="Plugins"
-              emptyText="No custom plugin folders added."
-              folders={customPluginFolders}
-              addLabel="Add Plugin Folder"
-              onAdd={addPluginFolder}
-              onRemove={removePluginFolder}
-            />
           </div>
         </div>
       </section>
@@ -715,6 +690,47 @@ function App() {
           </div>
         ) : null}
       </section>
+      <aside className="folder-panel">
+        <div className="panel-heading">
+          <h2>Detection</h2>
+          <span>folders</span>
+        </div>
+        <div className="folder-manager">
+          <FolderPicker
+            title="FL Studio"
+            emptyText="No custom FL Studio folders added."
+            folders={customFlStudioFolders}
+            addLabel="Add FL Studio Folder"
+            onAdd={addFlStudioFolder}
+            onRemove={removeFlStudioFolder}
+          />
+          <FolderPicker
+            title="User data"
+            emptyText="No user data folders added."
+            folders={userDataFolders}
+            addLabel="Add User Data Folder"
+            onAdd={addUserDataFolder}
+            onRemove={removeUserDataFolder}
+          />
+          <FolderPicker
+            title="Projects"
+            emptyText="No project folders added."
+            folders={projectFolders}
+            addLabel="Add Project Folder"
+            onAdd={addProjectFolder}
+            onRemove={removeProjectFolder}
+          />
+          <FolderPicker
+            title="Plugins"
+            emptyText="No custom plugin folders added."
+            folders={customPluginFolders}
+            addLabel="Add Plugin Folder"
+            onAdd={addPluginFolder}
+            onRemove={removePluginFolder}
+          />
+        </div>
+      </aside>
+      </div>
     </main>
   );
 }
