@@ -232,7 +232,8 @@ async function detectFlStudio(
       daw ??= {
         name: "FL Studio",
         version: inferFlStudioVersion(path.basename(folder)),
-        path: folder
+        path: folder,
+        executablePath: await findFlStudioExecutable(folder)
       };
     } catch {
       continue;
@@ -244,6 +245,27 @@ async function detectFlStudio(
   }
 
   warnings.push("FL Studio install folder was not found in common Image-Line locations.");
+  return undefined;
+}
+
+async function findFlStudioExecutable(folder: string): Promise<string | undefined> {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const executableNames = ["FL64.exe", "FL.exe"];
+
+  for (const executableName of executableNames) {
+    const executablePath = path.join(folder, executableName);
+
+    try {
+      const stat = await fs.stat(executablePath);
+      if (stat.isFile()) {
+        return executablePath;
+      }
+    } catch {
+      continue;
+    }
+  }
+
   return undefined;
 }
 

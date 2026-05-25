@@ -15,8 +15,17 @@ const mockCompatibilitySnapshot: CompatibilitySnapshot = {
   clientVersion: "0.1.0",
   daw: {
     name: "FL Studio",
-    version: "21.2 mock scan"
+    version: "21.2 mock scan",
+    executablePath: "C:\\Program Files\\Image-Line\\FL Studio 21\\FL64.exe"
   },
+  projectFiles: [
+    {
+      name: "Demo Session.flp",
+      path: "C:\\Users\\Producer\\Documents\\Image-Line\\FL Studio\\Projects\\Demo Session.flp",
+      type: "project",
+      source: "user-data"
+    }
+  ],
   plugins: [
     {
       name: "Fruity Parametric EQ 2",
@@ -61,6 +70,7 @@ function App() {
   const [userDataFolders, setUserDataFolders] = useState<string[]>([]);
   const [projectFolders, setProjectFolders] = useState<string[]>([]);
   const [customPluginFolders, setCustomPluginFolders] = useState<string[]>([]);
+  const [localSnapshot, setLocalSnapshot] = useState<CompatibilitySnapshot | null>(null);
 
   useEffect(() => {
     let isCurrentSocket = true;
@@ -95,7 +105,14 @@ function App() {
         return;
       }
 
-      const message = JSON.parse(event.data) as ServerMessage;
+      let message: ServerMessage;
+
+      try {
+        message = JSON.parse(event.data) as ServerMessage;
+      } catch {
+        setNotice("Relay sent a message MixerLink could not read.");
+        return;
+      }
 
       switch (message.type) {
         case "server.hello":
@@ -260,7 +277,7 @@ function App() {
     });
   }
 
-  async function shareCompatibility() {
+  async function scanLocalCompatibility() {
     setIsScanningCompatibility(true);
 
     try {
@@ -268,6 +285,31 @@ function App() {
         ? await window.mixerlink.scanCompatibility()
         : mockCompatibilitySnapshot;
 
+      setLocalSnapshot(snapshot);
+      setNotice(
+        window.mixerlink
+          ? `Scan found ${snapshot.plugins.length} plugins and ${snapshot.projectFiles?.length ?? 0} project files.`
+          : "Browser preview scanned mock compatibility data."
+      );
+      return snapshot;
+    } catch (error) {
+      setNotice(
+        `Compatibility scan failed: ${error instanceof Error ? error.message : "MixerLink could not read local plugin folders."}`
+      );
+      return undefined;
+    } finally {
+      setIsScanningCompatibility(false);
+    }
+  }
+
+  async function shareCompatibility() {
+    const snapshot = localSnapshot ?? (await scanLocalCompatibility());
+
+    if (!snapshot) {
+      return;
+    }
+
+    try {
       send({
         type: "compatibility.update",
         payload: snapshot
@@ -278,11 +320,50 @@ function App() {
           : "Browser preview shared mock compatibility data."
       );
     } catch (error) {
-      setNotice(
-        `Compatibility scan failed: ${error instanceof Error ? error.message : "MixerLink could not read local plugin folders."}`
-      );
-    } finally {
-      setIsScanningCompatibility(false);
+      setNotice(`Compatibility share failed: ${error instanceof Error ? error.message : "Relay rejected the snapshot."}`);
+    }
+  }
+
+  async function launchFlStudio() {
+    if (!window.mixerlink) {
+      setNotice("FL Studio launch is available in the desktop app.");
+      return;
+    }
+
+    try {
+      await window.mixerlink.launchFlStudio(localSnapshot?.daw?.executablePath);
+      setNotice("FL Studio launch requested.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "FL Studio could not be launched.");
+    }
+  }
+
+  async function openProject(projectPath: string) {
+    if (!window.mixerlink) {
+      setNotice("Project launch is available in the desktop app.");
+      return;
+    }
+
+    try {
+      await window.mixerlink.openProjectInFlStudio({
+        projectPath,
+        executablePath: localSnapshot?.daw?.executablePath
+      });
+      setNotice("Project open requested in FL Studio.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Project could not be opened.");
+    }
+  }
+
+  async function revealPath(targetPath: string) {
+    if (!window.mixerlink) {
+      return;
+    }
+
+    try {
+      await window.mixerlink.revealPath(targetPath);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Path could not be shown.");
     }
   }
 
@@ -519,6 +600,14 @@ function App() {
             <button
               type="button"
               className="secondary"
+              disabled={isScanningCompatibility}
+              onClick={scanLocalCompatibility}
+            >
+              {isScanningCompatibility ? "Scanning..." : "Scan Local Setup"}
+            </button>
+            <button
+              type="button"
+              className="secondary"
               disabled={!canSend || !session || isScanningCompatibility}
               onClick={shareCompatibility}
             >
@@ -540,6 +629,14 @@ function App() {
           <span>{collaboratorCount} connected</span>
         </div>
         <p>{notice}</p>
+        <LocalIntegrationPanel
+          snapshot={localSnapshot}
+          isScanning={isScanningCompatibility}
+          onScan={scanLocalCompatibility}
+          onLaunchFlStudio={launchFlStudio}
+          onOpenProject={openProject}
+          onRevealPath={revealPath}
+        />
         {session ? (
           <div className="session-grid">
             <section className="session-section">
@@ -732,6 +829,85 @@ function App() {
       </aside>
       </div>
     </main>
+  );
+}
+
+function LocalIntegrationPanel({
+  snapshot,
+  isScanning,
+  onScan,
+  onLaunchFlStudio,
+  onOpenProject,
+  onRevealPath
+}: {
+  snapshot: CompatibilitySnapshot | null;
+  isScanning: boolean;
+  onScan: () => void;
+  onLaunchFlStudio: () => void;
+  onOpenProject: (projectPath: string) => void;
+  onRevealPath: (targetPath: string) => void;
+}) {
+  const projects = (snapshot?.projectFiles ?? []).filter((projectFile) => projectFile.type === "project");
+  const latestProjects = projects.slice(0, 6);
+
+  return (
+    <section className="local-integration">
+      <div className="section-heading">
+        <h3>FL Studio</h3>
+        <span>{snapshot?.daw ? "detected" : "local"}</span>
+      </div>
+      {snapshot ? (
+        <>
+          <div className="fl-detection-card">
+            <div>
+              <strong>{snapshot.daw?.version ? `FL Studio ${snapshot.daw.version}` : "FL Studio"}</strong>
+              <small>{snapshot.daw?.path ?? "Install folder not detected"}</small>
+            </div>
+            <button type="button" className="secondary compact" onClick={onLaunchFlStudio}>
+              Launch
+            </button>
+          </div>
+          {latestProjects.length > 0 ? (
+            <div className="project-launcher">
+              <div className="section-heading compact-heading">
+                <h3>Projects</h3>
+                <span>{projects.length}</span>
+              </div>
+              <ul>
+                {latestProjects.map((projectFile) => (
+                  <li key={projectFile.path}>
+                    <div>
+                      <strong>{projectFile.name}</strong>
+                      <small>{projectFile.path}</small>
+                    </div>
+                    <span className="project-actions">
+                      <button type="button" className="secondary compact" onClick={() => onRevealPath(projectFile.path)}>
+                        Show
+                      </button>
+                      <button type="button" className="compact" onClick={() => onOpenProject(projectFile.path)}>
+                        Open
+                      </button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="empty-compatibility">No `.flp` files found yet. Add a project folder or user data folder, then scan.</p>
+          )}
+        </>
+      ) : (
+        <div className="fl-detection-card empty">
+          <div>
+            <strong>Scan this machine</strong>
+            <small>Find FL Studio, plugins, and project files before sharing a session.</small>
+          </div>
+          <button type="button" className="secondary compact" disabled={isScanning} onClick={onScan}>
+            {isScanning ? "Scanning..." : "Scan"}
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 

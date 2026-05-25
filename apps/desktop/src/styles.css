@@ -687,6 +687,68 @@ h1 {
   margin-top: 18px;
 }
 
+.local-integration {
+  border-top: 1px solid #30343a;
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 16px;
+}
+
+.fl-detection-card,
+.project-launcher li {
+  align-items: center;
+  background: #181a1e;
+  border: 1px solid #30343a;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 12px;
+}
+
+.fl-detection-card.empty {
+  border-color: rgba(255, 177, 95, 0.38);
+}
+
+.fl-detection-card strong,
+.project-launcher strong {
+  color: #f7f8fb;
+  display: block;
+}
+
+.fl-detection-card small,
+.project-launcher small {
+  color: #8f98a4;
+  display: block;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.project-launcher {
+  display: grid;
+  gap: 10px;
+}
+
+.compact-heading {
+  margin-bottom: 0;
+}
+
+.project-launcher ul {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.project-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
 .activity-section {
   grid-column: 1 / -1;
 }

@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { spawn } = require("node:child_process");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
@@ -86,6 +87,83 @@ async function scanCompatibility() {
     console.error("MixerLink compatibility scan failed:", error);
     throw new Error(error instanceof Error ? error.message : "Unknown compatibility scan error");
   }
+}
+
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function launchDetached(executablePath, args = []) {
+  const child = spawn(executablePath, args, {
+    detached: true,
+    stdio: "ignore"
+  });
+  child.unref();
+}
+
+async function launchFlStudio(_event, executablePath) {
+  const normalizedExecutablePath = String(executablePath ?? "").trim();
+
+  if (normalizedExecutablePath && (await pathExists(normalizedExecutablePath))) {
+    launchDetached(normalizedExecutablePath);
+    return { ok: true };
+  }
+
+  const settings = await readSettings();
+  const scanner = await import(pathToFileURL(getScannerModulePath()).href);
+  const snapshot = await scanner.scanLocalCompatibility({
+    customFlStudioFolders: settings.customFlStudioFolders,
+    userDataFolders: settings.userDataFolders,
+    projectFolders: settings.projectFolders,
+    customPluginFolders: settings.customPluginFolders,
+    maxPluginsPerFolder: 1,
+    maxProjectFilesPerFolder: 1,
+    maxDepth: 1
+  });
+
+  if (snapshot.daw?.executablePath && (await pathExists(snapshot.daw.executablePath))) {
+    launchDetached(snapshot.daw.executablePath);
+    return { ok: true };
+  }
+
+  throw new Error("FL Studio executable was not found. Add the FL Studio install folder, then scan again.");
+}
+
+async function openProjectInFlStudio(_event, request) {
+  const projectPath = String(request?.projectPath ?? "").trim();
+  const executablePath = String(request?.executablePath ?? "").trim();
+
+  if (!projectPath || !(await pathExists(projectPath))) {
+    throw new Error("Project file was not found.");
+  }
+
+  if (executablePath && (await pathExists(executablePath))) {
+    launchDetached(executablePath, [projectPath]);
+    return { ok: true };
+  }
+
+  const result = await shell.openPath(projectPath);
+  if (result) {
+    throw new Error(result);
+  }
+
+  return { ok: true };
+}
+
+async function revealPath(_event, targetPath) {
+  const normalizedPath = String(targetPath ?? "").trim();
+
+  if (!normalizedPath || !(await pathExists(normalizedPath))) {
+    throw new Error("Path was not found.");
+  }
+
+  shell.showItemInFolder(normalizedPath);
+  return { ok: true };
 }
 
 async function getFolders(settingsKey) {
@@ -204,6 +282,9 @@ function createWindow() {
 
 app.whenReady().then(() => {
   ipcMain.handle("compatibility:scan", scanCompatibility);
+  ipcMain.handle("fl-studio:launch", launchFlStudio);
+  ipcMain.handle("project:open", openProjectInFlStudio);
+  ipcMain.handle("path:reveal", revealPath);
   ipcMain.handle("relay-urls:get", getLocalRelayUrls);
   ipcMain.handle("fl-studio-folders:get", getCustomFlStudioFolders);
   ipcMain.handle("fl-studio-folders:add", addCustomFlStudioFolder);

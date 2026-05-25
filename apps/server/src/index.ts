@@ -32,7 +32,7 @@ function createSessionCode(): SessionCode {
   return code;
 }
 
-function createCollaborator(displayName: string): Collaborator {
+function createCollaborator(displayName: unknown): Collaborator {
   return {
     id: randomUUID(),
     displayName: normalizeDisplayName(displayName),
@@ -41,8 +41,8 @@ function createCollaborator(displayName: string): Collaborator {
   };
 }
 
-function normalizeDisplayName(displayName: string): string {
-  const normalized = displayName.trim();
+function normalizeDisplayName(displayName: unknown): string {
+  const normalized = String(displayName ?? "").trim();
   return normalized.length > 0 ? normalized.slice(0, 48) : "Guest";
 }
 
@@ -158,7 +158,7 @@ function leaveRoomByRequest(socket: WebSocket): void {
   }
 }
 
-function joinRoom(socket: WebSocket, room: Room, displayName: string): void {
+function joinRoom(socket: WebSocket, room: Room, displayName: unknown): void {
   leaveCurrentRoom(socket);
 
   const collaborator = createCollaborator(displayName);
@@ -195,12 +195,12 @@ function handleMessage(socket: WebSocket, message: ClientMessage): void {
         type: "session.created",
         payload: { code }
       });
-      joinRoom(socket, room, message.payload.displayName);
+      joinRoom(socket, room, message.payload?.displayName);
       return;
     }
 
     case "session.join": {
-      const code = message.payload.code.trim();
+      const code = String(message.payload?.code ?? "").trim();
       const room = rooms.get(code);
 
       if (!room) {

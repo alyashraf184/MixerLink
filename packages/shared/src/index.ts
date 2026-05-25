@@ -13,6 +13,7 @@ export type CompatibilitySnapshot = {
     name: "FL Studio";
     version?: string;
     path?: string;
+    executablePath?: string;
   };
   projectFiles?: Array<{
     name: string;

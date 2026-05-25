@@ -2,6 +2,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("mixerlink", {
   scanCompatibility: () => ipcRenderer.invoke("compatibility:scan"),
+  launchFlStudio: (executablePath) => ipcRenderer.invoke("fl-studio:launch", executablePath),
+  openProjectInFlStudio: (request) => ipcRenderer.invoke("project:open", request),
+  revealPath: (targetPath) => ipcRenderer.invoke("path:reveal", targetPath),
   getLocalRelayUrls: () => ipcRenderer.invoke("relay-urls:get"),
   getCustomFlStudioFolders: () => ipcRenderer.invoke("fl-studio-folders:get"),
   addCustomFlStudioFolder: () => ipcRenderer.invoke("fl-studio-folders:add"),

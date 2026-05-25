@@ -6,6 +6,9 @@ declare global {
   interface Window {
     mixerlink?: {
       scanCompatibility: () => Promise<CompatibilitySnapshot>;
+      launchFlStudio: (executablePath?: string) => Promise<{ ok: true }>;
+      openProjectInFlStudio: (request: { projectPath: string; executablePath?: string }) => Promise<{ ok: true }>;
+      revealPath: (targetPath: string) => Promise<{ ok: true }>;
       getLocalRelayUrls: () => Promise<string[]>;
       getCustomFlStudioFolders: () => Promise<string[]>;
       addCustomFlStudioFolder: () => Promise<string[]>;
