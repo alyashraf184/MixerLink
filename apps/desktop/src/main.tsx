@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { ClientMessage, ServerMessage } from "@mixerlink/protocol";
 import {
   compareCompatibilitySnapshots,
+  type BridgeState,
   type BridgeOperation,
   type CompatibilityComparison,
   type CompatibilitySnapshot,
@@ -30,6 +31,11 @@ type FlBridgeRuntime = {
   playing?: boolean;
   tempoBpm?: number;
   script?: string;
+};
+
+type LocalBridgeChange = {
+  operation: BridgeOperation;
+  receivedAt: string;
 };
 
 const mockCompatibilitySnapshot: CompatibilitySnapshot = {
@@ -94,6 +100,8 @@ function App() {
   const [customPluginFolders, setCustomPluginFolders] = useState<string[]>([]);
   const [localSnapshot, setLocalSnapshot] = useState<CompatibilitySnapshot | null>(null);
   const [bridgeTempoInput, setBridgeTempoInput] = useState("120");
+  const [localBridgeState, setLocalBridgeState] = useState<BridgeState>({ transport: "stopped", tempoBpm: 120 });
+  const [localBridgeLastChange, setLocalBridgeLastChange] = useState<LocalBridgeChange | null>(null);
   const [flBridgeStatus, setFlBridgeStatus] = useState<FlBridgeStatus | null>(null);
   const [flBridgeRuntime, setFlBridgeRuntime] = useState<FlBridgeRuntime | null>(null);
   const [isDetectionOpen, setIsDetectionOpen] = useState(false);
@@ -183,10 +191,12 @@ function App() {
   }, [relayUrl]);
 
   useEffect(() => {
-    if (session?.bridge.tempoBpm) {
-      setBridgeTempoInput(String(session.bridge.tempoBpm));
+    const tempoBpm = session?.bridge.tempoBpm ?? localBridgeState.tempoBpm;
+
+    if (tempoBpm) {
+      setBridgeTempoInput(String(tempoBpm));
     }
-  }, [session?.bridge.tempoBpm]);
+  }, [localBridgeState.tempoBpm, session?.bridge.tempoBpm]);
 
   useEffect(() => {
     const mixerlink = window.mixerlink;
@@ -222,6 +232,7 @@ function App() {
             const installedStatus = await mixerlink.installFlBridgeScript();
             setFlBridgeStatus(installedStatus);
             setFlBridgeRuntime(installedStatus.runtime ?? null);
+            setLocalBridgeState((state) => applyFlBridgeRuntimeToState(state, installedStatus.runtime));
             setNotice(
               nextFlBridgeStatus.scriptOutdated
                 ? "MixerLink Bridge script updated. Restart FL Studio once to load the new bridge."
@@ -237,6 +248,7 @@ function App() {
 
         setFlBridgeStatus(nextFlBridgeStatus);
         setFlBridgeRuntime(nextFlBridgeStatus.runtime ?? null);
+        setLocalBridgeState((state) => applyFlBridgeRuntimeToState(state, nextFlBridgeStatus.runtime));
       })
       .catch(() => {
         setLocalRelayUrls([defaultRelayUrl]);
@@ -256,6 +268,7 @@ function App() {
 
     return window.mixerlink.onFlBridgeRuntime((runtime) => {
       setFlBridgeRuntime(runtime);
+      setLocalBridgeState((state) => applyFlBridgeRuntimeToState(state, runtime));
     });
   }, []);
 
@@ -265,7 +278,12 @@ function App() {
     }
 
     const interval = window.setInterval(() => {
-      window.mixerlink?.getFlBridgeRuntime().then(setFlBridgeRuntime).catch(() => undefined);
+      window.mixerlink?.getFlBridgeRuntime()
+        .then((runtime) => {
+          setFlBridgeRuntime(runtime);
+          setLocalBridgeState((state) => applyFlBridgeRuntimeToState(state, runtime));
+        })
+        .catch(() => undefined);
     }, 1500);
 
     return () => window.clearInterval(interval);
@@ -277,8 +295,11 @@ function App() {
     }
 
     return window.mixerlink.onBridgeOperationFromFl((operation) => {
+      setLocalBridgeState((state) => applyBridgeOperationToState(state, operation));
+      setLocalBridgeLastChange({ operation, receivedAt: new Date().toISOString() });
+
       if (socketRef.current?.readyState !== WebSocket.OPEN) {
-        setNotice("FL Studio sent a bridge operation, but no MixerLink room is connected.");
+        setNotice(`FL Studio ${describeBridgeOperation(operation)} locally. Join a room to share it.`);
         return;
       }
 
@@ -311,7 +332,6 @@ function App() {
   const canSend = connectionStatus === "connected";
   const collaboratorCount = useMemo(() => session?.collaborators.length ?? 0, [session]);
   const hasSharedCompatibility = Boolean(ownCollaboratorId && session?.compatibility[ownCollaboratorId]);
-  const bridgeState = session?.bridge ?? { transport: "stopped" as const, tempoBpm: 120 };
   const canControlBridge = Boolean(window.mixerlink) || (canSend && Boolean(session));
   const compatibilityReports = useMemo(() => {
     if (!session || !ownCollaboratorId) {
@@ -439,6 +459,7 @@ function App() {
       const status = await window.mixerlink.installFlBridgeScript();
       setFlBridgeStatus(status);
       setFlBridgeRuntime(status.runtime ?? null);
+      setLocalBridgeState((state) => applyFlBridgeRuntimeToState(state, status.runtime));
       setNotice("MixerLink Bridge script installed. Select 'MixerLink Bridge' in FL Studio MIDI settings.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "MixerLink could not install the FL Studio bridge script.");
@@ -446,7 +467,7 @@ function App() {
   }
 
   function syncTempo() {
-    const bpm = Math.round(Number(bridgeTempoInput) * 10) / 10;
+    const bpm = Math.round(Number(bridgeTempoInput));
 
     if (!Number.isFinite(bpm) || bpm < 20 || bpm > 300) {
       setNotice("Tempo must be between 20 and 300 BPM.");
@@ -862,6 +883,11 @@ function App() {
           </div>
           <div className="lobby-side">
             <p className="notice-line">{notice}</p>
+            <FlStatePanel
+              localBridgeState={localBridgeState}
+              lastChange={localBridgeLastChange}
+              flBridgeRuntime={flBridgeRuntime}
+            />
             <LocalIntegrationPanel
               snapshot={localSnapshot}
               isScanning={isScanningCompatibility}
@@ -925,7 +951,6 @@ function App() {
             />
             <BridgeControlPanel
               canControl={canControlBridge}
-              bridgeState={bridgeState}
               flBridgeStatus={flBridgeStatus}
               flBridgeRuntime={flBridgeRuntime}
               tempoInput={bridgeTempoInput}
@@ -934,6 +959,12 @@ function App() {
               onStop={() => sendBridgeOperation({ type: "transport.stop" })}
               onSyncTempo={syncTempo}
               onInstallBridge={installFlBridgeScript}
+            />
+            <FlStatePanel
+              localBridgeState={localBridgeState}
+              lastChange={localBridgeLastChange}
+              sessionBridgeState={session.bridge}
+              flBridgeRuntime={flBridgeRuntime}
             />
           </div>
           <div className="session-grid">
@@ -1110,9 +1141,125 @@ function createBridgeOperationFromState(session: SessionState): BridgeOperation 
   }
 }
 
+function applyFlBridgeRuntimeToState(state: BridgeState, runtime?: FlBridgeRuntime | null): BridgeState {
+  return {
+    transport: typeof runtime?.playing === "boolean" ? (runtime.playing ? "playing" : "stopped") : state.transport,
+    tempoBpm: typeof runtime?.tempoBpm === "number" ? Math.round(runtime.tempoBpm) : state.tempoBpm,
+    lastOperation: state.lastOperation
+  };
+}
+
+function applyBridgeOperationToState(state: BridgeState, operation: BridgeOperation): BridgeState {
+  switch (operation.type) {
+    case "transport.play":
+      return {
+        ...state,
+        transport: "playing"
+      };
+    case "transport.stop":
+      return {
+        ...state,
+        transport: "stopped"
+      };
+    case "tempo.changed":
+      return {
+        ...state,
+        tempoBpm: Math.round(Number(operation.payload.bpm))
+      };
+    default:
+      return state;
+  }
+}
+
+function describeBridgeOperation(operation: BridgeOperation): string {
+  switch (operation.type) {
+    case "transport.play":
+      return "started playback";
+    case "transport.stop":
+      return "stopped playback";
+    case "tempo.changed":
+      return `set tempo to ${Math.round(Number(operation.payload.bpm))} BPM`;
+    default:
+      return "updated the bridge";
+  }
+}
+
+function formatBridgeTimestamp(value?: string): string {
+  if (!value) {
+    return "Waiting";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Waiting";
+  }
+
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function FlStatePanel({
+  localBridgeState,
+  lastChange,
+  sessionBridgeState,
+  flBridgeRuntime
+}: {
+  localBridgeState: BridgeState;
+  lastChange?: LocalBridgeChange | null;
+  sessionBridgeState?: BridgeState;
+  flBridgeRuntime: FlBridgeRuntime | null;
+}) {
+  const flConnected = Boolean(flBridgeRuntime?.connected);
+  const sessionMatches =
+    !sessionBridgeState ||
+    (sessionBridgeState.transport === localBridgeState.transport && sessionBridgeState.tempoBpm === localBridgeState.tempoBpm);
+
+  return (
+    <section className="fl-state-panel">
+      <div className="section-heading">
+        <h3>FL Studio State</h3>
+        <span>{flConnected ? "receiving" : "waiting"}</span>
+      </div>
+      <dl className="bridge-metrics">
+        <div>
+          <dt>Transport</dt>
+          <dd>{localBridgeState.transport}</dd>
+        </div>
+        <div>
+          <dt>Tempo</dt>
+          <dd>{localBridgeState.tempoBpm} BPM</dd>
+        </div>
+        <div>
+          <dt>Last Seen</dt>
+          <dd>{formatBridgeTimestamp(flBridgeRuntime?.lastSeenAt)}</dd>
+        </div>
+      </dl>
+      <div className="fl-state-change">
+        <span>{lastChange ? describeBridgeOperation(lastChange.operation) : "No FL changes received yet"}</span>
+        <time dateTime={lastChange?.receivedAt}>{formatBridgeTimestamp(lastChange?.receivedAt)}</time>
+      </div>
+      {sessionBridgeState ? (
+        <dl className="bridge-metrics compact">
+          <div>
+            <dt>Room Transport</dt>
+            <dd>{sessionBridgeState.transport}</dd>
+          </div>
+          <div>
+            <dt>Room Tempo</dt>
+            <dd>{sessionBridgeState.tempoBpm} BPM</dd>
+          </div>
+          <div>
+            <dt>Room Match</dt>
+            <dd>{sessionMatches ? "yes" : "no"}</dd>
+          </div>
+        </dl>
+      ) : null}
+    </section>
+  );
+}
+
 function BridgeControlPanel({
   canControl,
-  bridgeState,
   flBridgeStatus,
   flBridgeRuntime,
   tempoInput,
@@ -1123,7 +1270,6 @@ function BridgeControlPanel({
   onInstallBridge
 }: {
   canControl: boolean;
-  bridgeState: SessionState["bridge"];
   flBridgeStatus: FlBridgeStatus | null;
   flBridgeRuntime: FlBridgeRuntime | null;
   tempoInput: string;
@@ -1156,7 +1302,7 @@ function BridgeControlPanel({
             {flConnected
               ? `Loaded script: ${flBridgeRuntime?.script ?? "MixerLink Bridge"}`
               : flBridgeStatus?.installed
-                ? "Commands are sent directly over the MixerLink loopMIDI port."
+                ? "Commands are sent over MIDI; local FL transport and tempo changes sync back automatically."
                 : "Install the bundled MIDI script, restart FL Studio, then select MixerLink Bridge in MIDI settings."}
           </small>
         </div>
@@ -1173,11 +1319,16 @@ function BridgeControlPanel({
         </button>
         <label>
           Tempo
-          <span>
+          <span className="tempo-control">
             <input
-              inputMode="decimal"
+              className="tempo-number-input"
+              inputMode="numeric"
+              max="300"
+              min="20"
+              step="1"
+              type="number"
               value={tempoInput}
-              onChange={(event) => onTempoInputChange(event.target.value.replace(/[^\d.]/g, "").slice(0, 6))}
+              onChange={(event) => onTempoInputChange(event.target.value.replace(/[^\d]/g, "").slice(0, 3))}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   onSyncTempo();
@@ -1185,25 +1336,11 @@ function BridgeControlPanel({
               }}
             />
             <button type="button" className="secondary" disabled={!canControl} onClick={onSyncTempo}>
-              Sync
+              Send Tempo
             </button>
           </span>
         </label>
       </div>
-      <dl className="bridge-metrics">
-        <div>
-          <dt>Transport</dt>
-          <dd>{bridgeState.transport}</dd>
-        </div>
-        <div>
-          <dt>Tempo</dt>
-          <dd>{bridgeState.tempoBpm} BPM</dd>
-        </div>
-        <div>
-          <dt>Bridge</dt>
-          <dd>{flConnected ? "FL online" : midiReady ? "MIDI" : "Install"}</dd>
-        </div>
-      </dl>
     </section>
   );
 }

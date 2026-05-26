@@ -10,11 +10,15 @@ const { pathToFileURL, URL } = require("node:url");
 const isDev = Boolean(process.env.MIXERLINK_DEV_SERVER_URL);
 let sessionRelay;
 let flBridgeServer;
+let flBridgeMidiListener;
+let flBridgeMidiListenerRestartTimeout;
 let mainWindow;
 let bridgeSequence = 0;
 const bridgeEvents = [];
 let flBridgeFilePollInterval;
 let lastLocalBridgeOperationKey;
+let pendingFlReportTempoLsb = 0;
+let pendingFlReportTempoMsb = 0;
 const flBridgeFolderName = "MixerLink";
 const flBridgeScriptName = "device_MixerLink.py";
 const legacyFlBridgeFolderName = "MixerLink Bridge";
@@ -83,6 +87,14 @@ function getBundledFlBridgeScriptPath() {
 
 function getMidiSenderPath() {
   return path.join(__dirname, "midi-send.exe");
+}
+
+function getMidiListenerPath() {
+  return path.join(__dirname, "midi-listen.ps1");
+}
+
+function getAppIconPath() {
+  return path.join(__dirname, "..", "build", "icon.ico");
 }
 
 function getFlBridgeInstallFolder() {
@@ -234,6 +246,37 @@ function updateFlBridgeRuntime(payload) {
   return getFlBridgeRuntime();
 }
 
+function updateFlBridgeRuntimeFromOperation(operation) {
+  if (operation.type === "transport.play") {
+    return updateFlBridgeRuntime({
+      playing: true
+    });
+  }
+
+  if (operation.type === "transport.stop") {
+    return updateFlBridgeRuntime({
+      playing: false
+    });
+  }
+
+  if (operation.type === "tempo.changed") {
+    return updateFlBridgeRuntime({
+      tempoBpm: operation.payload.bpm
+    });
+  }
+
+  return getFlBridgeRuntime();
+}
+
+function receiveBridgeOperationFromFl(operation) {
+  if (!isBridgeOperation(operation)) {
+    return;
+  }
+
+  mainWindow?.webContents.send("bridge:operation-from-fl", operation);
+  updateFlBridgeRuntimeFromOperation(operation);
+}
+
 async function writeJsonFile(filePath, payload) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.tmp`;
@@ -288,6 +331,107 @@ function sendMidiOperation(operation) {
     windowsHide: true
   });
   child.unref();
+}
+
+function startFlBridgeMidiListener() {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  if (flBridgeMidiListener && !flBridgeMidiListener.killed) {
+    return;
+  }
+
+  const listenerPath = getMidiListenerPath();
+  flBridgeMidiListener = spawn(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", listenerPath, "MixerLink"],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    }
+  );
+
+  flBridgeMidiListener.stdout.setEncoding("utf-8");
+  flBridgeMidiListener.stdout.on("data", (chunk) => {
+    for (const line of String(chunk).split(/\r?\n/)) {
+      const trimmed = line.trim();
+
+      if (trimmed) {
+        handleFlBridgeMidiMessageLine(trimmed);
+      }
+    }
+  });
+
+  flBridgeMidiListener.stderr.setEncoding("utf-8");
+  flBridgeMidiListener.stderr.on("data", (chunk) => {
+    const message = String(chunk).trim();
+    if (message) {
+      console.log(`MixerLink MIDI listener: ${message}`);
+    }
+  });
+
+  flBridgeMidiListener.on("exit", () => {
+    flBridgeMidiListener = undefined;
+    flBridgeMidiListenerRestartTimeout = setTimeout(startFlBridgeMidiListener, 5000);
+  });
+}
+
+function handleFlBridgeMidiMessageLine(line) {
+  let message;
+
+  try {
+    message = JSON.parse(line);
+  } catch {
+    return;
+  }
+
+  handleFlBridgeMidiMessage(message);
+}
+
+function handleFlBridgeMidiMessage(message) {
+  const status = Number(message.status) & 0xf0;
+  const data1 = Number(message.data1);
+  const data2 = Number(message.data2) & 0x7f;
+
+  if (status !== 0xb0) {
+    return;
+  }
+
+  if (data1 === 31) {
+    pendingFlReportTempoLsb = data2;
+    return;
+  }
+
+  if (data1 === 32) {
+    pendingFlReportTempoMsb = data2;
+    return;
+  }
+
+  if (data1 !== 30) {
+    return;
+  }
+
+  if (data2 === 1) {
+    receiveBridgeOperationFromFl({ type: "transport.play" });
+    return;
+  }
+
+  if (data2 === 2) {
+    receiveBridgeOperationFromFl({ type: "transport.stop" });
+    return;
+  }
+
+  if (data2 === 3) {
+    const bpm = Math.round(((pendingFlReportTempoLsb + pendingFlReportTempoMsb * 128) / 10) * 10) / 10;
+
+    if (bpm >= 20 && bpm <= 300) {
+      receiveBridgeOperationFromFl({
+        type: "tempo.changed",
+        payload: { bpm }
+      });
+    }
+  }
 }
 
 function getLocalRelayUrls() {
@@ -444,7 +588,7 @@ function startFlBridge(port) {
           return;
         }
 
-        mainWindow?.webContents.send("bridge:operation-from-fl", operation);
+        receiveBridgeOperationFromFl(operation);
         writeJson(response, 200, { ok: true });
         return;
       }
@@ -657,6 +801,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 680,
     backgroundColor: "#090a0f",
+    icon: getAppIconPath(),
     title: "MixerLink",
     autoHideMenuBar: true,
     webPreferences: {
@@ -704,6 +849,7 @@ app.whenReady().then(() => {
   ipcMain.handle("plugin-folders:remove", removeCustomPluginFolder);
   sessionRelay = startSessionRelay(4317);
   flBridgeServer = startFlBridge(4318);
+  startFlBridgeMidiListener();
   flBridgeFilePollInterval = setInterval(() => {
     refreshFlBridgeRuntimeFromFile().catch(() => undefined);
     refreshFlBridgeLocalOperationFromFile().catch(() => undefined);
@@ -720,6 +866,12 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   sessionRelay?.close();
   flBridgeServer?.close();
+  if (flBridgeMidiListenerRestartTimeout) {
+    clearTimeout(flBridgeMidiListenerRestartTimeout);
+  }
+  if (flBridgeMidiListener) {
+    flBridgeMidiListener.kill();
+  }
   if (flBridgeFilePollInterval) {
     clearInterval(flBridgeFilePollInterval);
   }
