@@ -28,7 +28,8 @@ let flBridgeRuntime = {
   lastSeenAt: undefined,
   playing: undefined,
   tempoBpm: undefined,
-  script: undefined
+  script: undefined,
+  channelRack: undefined
 };
 
 const { startSessionRelay } = require("./session-relay.cjs");
@@ -201,7 +202,8 @@ async function refreshFlBridgeRuntimeFromFile() {
         script: payload.script,
         playing: payload.playing,
         tempoBpm: payload.tempoBpm,
-        lastSeenAt: payload.lastSeenAt
+        lastSeenAt: payload.lastSeenAt,
+        channelRack: payload.channelRack
       });
     }
   } catch {
@@ -239,7 +241,11 @@ function updateFlBridgeRuntime(payload) {
     lastSeenAt,
     playing: typeof payload.playing === "boolean" ? payload.playing : flBridgeRuntime.playing,
     tempoBpm: Number.isFinite(Number(payload.tempoBpm)) ? Math.round(Number(payload.tempoBpm) * 10) / 10 : flBridgeRuntime.tempoBpm,
-    script: typeof payload.script === "string" ? payload.script : flBridgeRuntime.script
+    script: typeof payload.script === "string" ? payload.script : flBridgeRuntime.script,
+    channelRack:
+      payload.channelRack && Array.isArray(payload.channelRack.channels)
+        ? payload.channelRack
+        : flBridgeRuntime.channelRack
   };
 
   mainWindow?.webContents.send("fl-bridge:runtime", getFlBridgeRuntime());
@@ -262,6 +268,12 @@ function updateFlBridgeRuntimeFromOperation(operation) {
   if (operation.type === "tempo.changed") {
     return updateFlBridgeRuntime({
       tempoBpm: operation.payload.bpm
+    });
+  }
+
+  if (operation.type === "channel_rack.snapshot") {
+    return updateFlBridgeRuntime({
+      channelRack: operation.payload
     });
   }
 
@@ -316,7 +328,7 @@ function getMidiMessagesForOperation(operation) {
     ];
   }
 
-  return [controlChange | (20 << 8) | (0 << 16)];
+  return [];
 }
 
 function sendMidiOperation(operation) {
@@ -325,6 +337,10 @@ function sendMidiOperation(operation) {
   }
 
   const messages = getMidiMessagesForOperation(operation).map((message) => `0x${message.toString(16).padStart(8, "0")}`);
+  if (messages.length === 0) {
+    return;
+  }
+
   const child = spawn(getMidiSenderPath(), ["MixerLink", ...messages], {
     detached: true,
     stdio: "ignore",
@@ -468,7 +484,42 @@ function isBridgeOperation(operation) {
     return true;
   }
 
-  return operation.type === "tempo.changed" && Number.isFinite(Number(operation.payload?.bpm));
+  if (operation.type === "tempo.changed") {
+    return Number.isFinite(Number(operation.payload?.bpm));
+  }
+
+  if (operation.type === "channel_rack.snapshot") {
+    return Array.isArray(operation.payload?.channels) && operation.payload.channels.length <= 128;
+  }
+
+  if (operation.type === "channel_rack.channel.updated") {
+    return Number.isInteger(operation.payload?.index) && operation.payload?.patch && typeof operation.payload.patch === "object";
+  }
+
+  if (operation.type === "channel_rack.step.changed") {
+    return (
+      Number.isInteger(operation.payload?.index) &&
+      Number.isInteger(operation.payload?.step) &&
+      operation.payload.step >= 0 &&
+      operation.payload.step < 64 &&
+      typeof operation.payload?.active === "boolean"
+    );
+  }
+
+  if (operation.type === "channel_rack.plugin_parameter.changed") {
+    const value = Number(operation.payload?.value);
+    return (
+      Number.isInteger(operation.payload?.index) &&
+      typeof operation.payload?.pluginName === "string" &&
+      Number.isInteger(operation.payload?.parameterIndex) &&
+      typeof operation.payload?.parameterName === "string" &&
+      Number.isFinite(value) &&
+      value >= 0 &&
+      value <= 1
+    );
+  }
+
+  return false;
 }
 
 async function enqueueBridgeOperation(operation, source = "session") {
@@ -506,7 +557,7 @@ function readRequestJson(request) {
     request.on("data", (chunk) => {
       rawBody += chunk.toString("utf-8");
 
-      if (rawBody.length > 64 * 1024) {
+      if (rawBody.length > 512 * 1024) {
         request.destroy();
         reject(new Error("Request body is too large."));
       }
