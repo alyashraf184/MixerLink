@@ -5,6 +5,8 @@ import {
   compareCompatibilitySnapshots,
   type BridgeState,
   type BridgeOperation,
+  type ChannelRackChannel,
+  type ChannelRackState,
   type CompatibilityComparison,
   type CompatibilitySnapshot,
   type SessionState
@@ -31,6 +33,7 @@ type FlBridgeRuntime = {
   playing?: boolean;
   tempoBpm?: number;
   script?: string;
+  channelRack?: ChannelRackState;
 };
 
 type LocalBridgeChange = {
@@ -81,6 +84,7 @@ const mockCompatibilitySnapshot: CompatibilitySnapshot = {
 function App() {
   const socketRef = useRef<WebSocket | null>(null);
   const appliedBridgeOperationRef = useRef<string | null>(null);
+  const sharedChannelRackSessionRef = useRef<string | null>(null);
   const [sessionMode, setSessionMode] = useState<"start" | "join">("start");
   const [displayName, setDisplayName] = useState(() => localStorage.getItem("mixerlink.displayName") ?? "Producer");
   const [relayUrl, setRelayUrl] = useState(() => localStorage.getItem("mixerlink.relayUrl") ?? defaultRelayUrl);
@@ -100,7 +104,11 @@ function App() {
   const [customPluginFolders, setCustomPluginFolders] = useState<string[]>([]);
   const [localSnapshot, setLocalSnapshot] = useState<CompatibilitySnapshot | null>(null);
   const [bridgeTempoInput, setBridgeTempoInput] = useState("120");
-  const [localBridgeState, setLocalBridgeState] = useState<BridgeState>({ transport: "stopped", tempoBpm: 120 });
+  const [localBridgeState, setLocalBridgeState] = useState<BridgeState>({
+    transport: "stopped",
+    tempoBpm: 120,
+    channelRack: createEmptyChannelRackState()
+  });
   const [localBridgeLastChange, setLocalBridgeLastChange] = useState<LocalBridgeChange | null>(null);
   const [flBridgeStatus, setFlBridgeStatus] = useState<FlBridgeStatus | null>(null);
   const [flBridgeRuntime, setFlBridgeRuntime] = useState<FlBridgeRuntime | null>(null);
@@ -161,7 +169,7 @@ function App() {
           setNotice(`Joined session ${message.payload.code}.`);
           break;
         case "session.state":
-          setSession(message.payload);
+          setSession(normalizeSessionState(message.payload));
           setIsCreatingSession(false);
           break;
         case "session.left":
@@ -329,6 +337,32 @@ function App() {
     queueBridgeOperationForFl(operation);
   }, [ownCollaboratorId, session]);
 
+  useEffect(() => {
+    const channelRack = flBridgeRuntime?.channelRack;
+    if (
+      !session ||
+      !ownCollaboratorId ||
+      !channelRack ||
+      channelRack.channels.length === 0 ||
+      session.bridge.channelRack.channels.length > 0 ||
+      sharedChannelRackSessionRef.current === session.code ||
+      socketRef.current?.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+
+    sharedChannelRackSessionRef.current = session.code;
+    socketRef.current.send(
+      JSON.stringify({
+        type: "bridge.operation",
+        payload: {
+          type: "channel_rack.snapshot",
+          payload: channelRack
+        }
+      } satisfies ClientMessage)
+    );
+  }, [flBridgeRuntime?.channelRack, ownCollaboratorId, session]);
+
   const canSend = connectionStatus === "connected";
   const collaboratorCount = useMemo(() => session?.collaborators.length ?? 0, [session]);
   const hasSharedCompatibility = Boolean(ownCollaboratorId && session?.compatibility[ownCollaboratorId]);
@@ -424,6 +458,8 @@ function App() {
   }
 
   function sendBridgeOperation(operation: BridgeOperation) {
+    setLocalBridgeState((state) => applyBridgeOperationToState(state, operation));
+
     if (socketRef.current?.readyState === WebSocket.OPEN && session) {
       socketRef.current.send(
         JSON.stringify({
@@ -966,6 +1002,15 @@ function App() {
               sessionBridgeState={session.bridge}
               flBridgeRuntime={flBridgeRuntime}
             />
+            <ChannelRackPanel
+              state={
+                localBridgeState.channelRack.channels.length > 0
+                  ? localBridgeState.channelRack
+                  : session.bridge.channelRack
+              }
+              canControl={canControlBridge}
+              onOperation={sendBridgeOperation}
+            />
           </div>
           <div className="session-grid">
             <section className="session-section">
@@ -1124,6 +1169,10 @@ function App() {
 }
 
 function createBridgeOperationFromState(session: SessionState): BridgeOperation | undefined {
+  if (session.bridge.lastOperation?.operation) {
+    return session.bridge.lastOperation.operation;
+  }
+
   switch (session.bridge.lastOperation?.type) {
     case "transport.play":
       return { type: "transport.play" };
@@ -1145,6 +1194,7 @@ function applyFlBridgeRuntimeToState(state: BridgeState, runtime?: FlBridgeRunti
   return {
     transport: typeof runtime?.playing === "boolean" ? (runtime.playing ? "playing" : "stopped") : state.transport,
     tempoBpm: typeof runtime?.tempoBpm === "number" ? Math.round(runtime.tempoBpm) : state.tempoBpm,
+    channelRack: runtime?.channelRack ?? state.channelRack,
     lastOperation: state.lastOperation
   };
 }
@@ -1166,6 +1216,59 @@ function applyBridgeOperationToState(state: BridgeState, operation: BridgeOperat
         ...state,
         tempoBpm: Math.round(Number(operation.payload.bpm))
       };
+    case "channel_rack.snapshot":
+      return {
+        ...state,
+        channelRack: operation.payload
+      };
+    case "channel_rack.channel.updated":
+      return {
+        ...state,
+        channelRack: {
+          ...state.channelRack,
+          capturedAt: new Date().toISOString(),
+          channels: state.channelRack.channels.map((channel) =>
+            channel.index === operation.payload.index ? { ...channel, ...operation.payload.patch } : channel
+          )
+        }
+      };
+    case "channel_rack.step.changed":
+      return {
+        ...state,
+        channelRack: {
+          ...state.channelRack,
+          capturedAt: new Date().toISOString(),
+          channels: state.channelRack.channels.map((channel) => {
+            if (channel.index !== operation.payload.index) {
+              return channel;
+            }
+
+            const steps = [...channel.steps];
+            steps[operation.payload.step] = operation.payload.active;
+            return { ...channel, steps };
+          })
+        }
+      };
+    case "channel_rack.plugin_parameter.changed":
+      return {
+        ...state,
+        channelRack: {
+          ...state.channelRack,
+          capturedAt: new Date().toISOString(),
+          channels: state.channelRack.channels.map((channel) =>
+            channel.index === operation.payload.index
+              ? {
+                  ...channel,
+                  pluginParameters: channel.pluginParameters.map((parameter) =>
+                    parameter.index === operation.payload.parameterIndex
+                      ? { ...parameter, value: operation.payload.value }
+                      : parameter
+                  )
+                }
+              : channel
+          )
+        }
+      };
     default:
       return state;
   }
@@ -1179,9 +1282,35 @@ function describeBridgeOperation(operation: BridgeOperation): string {
       return "stopped playback";
     case "tempo.changed":
       return `set tempo to ${Math.round(Number(operation.payload.bpm))} BPM`;
+    case "channel_rack.snapshot":
+      return `shared ${operation.payload.channels.length} Channel Rack channels`;
+    case "channel_rack.channel.updated":
+      return `updated Channel Rack channel ${operation.payload.index + 1}`;
+    case "channel_rack.step.changed":
+      return `${operation.payload.active ? "enabled" : "disabled"} step ${operation.payload.step + 1}`;
+    case "channel_rack.plugin_parameter.changed":
+      return `updated ${operation.payload.parameterName}`;
     default:
       return "updated the bridge";
   }
+}
+
+function createEmptyChannelRackState(): ChannelRackState {
+  return {
+    channels: [],
+    stepCount: 16,
+    capturedAt: new Date(0).toISOString()
+  };
+}
+
+function normalizeSessionState(session: SessionState): SessionState {
+  return {
+    ...session,
+    bridge: {
+      ...session.bridge,
+      channelRack: session.bridge.channelRack ?? createEmptyChannelRackState()
+    }
+  };
 }
 
 function formatBridgeTimestamp(value?: string): string {
@@ -1343,6 +1472,198 @@ function BridgeControlPanel({
       </div>
     </section>
   );
+}
+
+function ChannelRackPanel({
+  state,
+  canControl,
+  onOperation
+}: {
+  state: ChannelRackState;
+  canControl: boolean;
+  onOperation: (operation: BridgeOperation) => void;
+}) {
+  return (
+    <section className="channel-rack-panel">
+      <div className="section-heading">
+        <h3>Channel Rack</h3>
+        <span>{state.channels.length} channels</span>
+      </div>
+      <p className="channel-rack-note">
+        Existing channels sync both ways. Plugin parameters are enabled for the built-in adapter catalog and are
+        verified by plugin and parameter name before application.
+      </p>
+      {state.channels.length === 0 ? (
+        <p className="empty-compatibility">Connect FL Studio to capture its Channel Rack.</p>
+      ) : (
+        <div className="channel-rack-list">
+          {state.channels.map((channel) => (
+            <ChannelRackRow
+              key={`${channel.index}:${channel.pluginName ?? channel.type}`}
+              channel={channel}
+              canControl={canControl}
+              onOperation={onOperation}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ChannelRackRow({
+  channel,
+  canControl,
+  onOperation
+}: {
+  channel: ChannelRackChannel;
+  canControl: boolean;
+  onOperation: (operation: BridgeOperation) => void;
+}) {
+  const expectedPluginName = channel.pluginName;
+
+  function updateChannel(patch: Extract<BridgeOperation, { type: "channel_rack.channel.updated" }>["payload"]["patch"]) {
+    onOperation({
+      type: "channel_rack.channel.updated",
+      payload: {
+        index: channel.index,
+        expectedPluginName,
+        patch
+      }
+    });
+  }
+
+  return (
+    <article className="channel-rack-row">
+      <div className="channel-rack-heading">
+        <span className="channel-number">{channel.index + 1}</span>
+        <input
+          aria-label={`Channel ${channel.index + 1} name`}
+          defaultValue={channel.name}
+          disabled={!canControl}
+          onBlur={(event) => {
+            const name = event.currentTarget.value.trim();
+            if (name && name !== channel.name) {
+              updateChannel({ name });
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+        <span className={`plugin-support ${channel.supportedPlugin ? "supported" : ""}`}>
+          {channel.pluginName ?? channel.type}
+        </span>
+        <button
+          type="button"
+          className={`secondary compact ${channel.muted ? "active-control" : ""}`}
+          disabled={!canControl}
+          onClick={() => updateChannel({ muted: !channel.muted })}
+        >
+          Mute
+        </button>
+        <button
+          type="button"
+          className={`secondary compact ${channel.solo ? "active-control" : ""}`}
+          disabled={!canControl}
+          onClick={() => updateChannel({ solo: !channel.solo })}
+        >
+          Solo
+        </button>
+      </div>
+      <div className="channel-rack-controls">
+        <label>
+          Volume
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value={channel.volume}
+            disabled={!canControl}
+            onChange={(event) => updateChannel({ volume: Number(event.currentTarget.value) })}
+          />
+        </label>
+        <label>
+          Pan
+          <input
+            type="range"
+            min="-1"
+            max="1"
+            step="0.01"
+            value={channel.pan}
+            disabled={!canControl}
+            onChange={(event) => updateChannel({ pan: Number(event.currentTarget.value) })}
+          />
+        </label>
+        <span>FX {channel.targetMixerTrack}</span>
+      </div>
+      <div className="step-sequencer" aria-label={`${channel.name} steps`}>
+        {channel.steps.slice(0, stateStepCount(channel)).map((active, step) => (
+          <button
+            type="button"
+            key={step}
+            className={active ? "active" : ""}
+            aria-label={`${channel.name} step ${step + 1}`}
+            aria-pressed={active}
+            disabled={!canControl}
+            onClick={() =>
+              onOperation({
+                type: "channel_rack.step.changed",
+                payload: {
+                  index: channel.index,
+                  expectedPluginName,
+                  step,
+                  active: !active
+                }
+              })
+            }
+          />
+        ))}
+      </div>
+      {channel.supportedPlugin && channel.pluginParameters.length > 0 ? (
+        <details className="plugin-parameters">
+          <summary>{channel.pluginName} parameters ({channel.pluginParameters.length})</summary>
+          <div>
+            {channel.pluginParameters.map((parameter) => (
+              <label key={parameter.index}>
+                <span>
+                  {parameter.name}
+                  <small>{parameter.displayValue || `${Math.round(parameter.value * 100)}%`}</small>
+                </span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.001"
+                  value={parameter.value}
+                  disabled={!canControl}
+                  onChange={(event) =>
+                    onOperation({
+                      type: "channel_rack.plugin_parameter.changed",
+                      payload: {
+                        index: channel.index,
+                        pluginName: channel.pluginName ?? "",
+                        parameterIndex: parameter.index,
+                        parameterName: parameter.name,
+                        value: Number(event.currentTarget.value)
+                      }
+                    })
+                  }
+                />
+              </label>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </article>
+  );
+}
+
+function stateStepCount(channel: ChannelRackChannel): number {
+  return Math.min(channel.steps.length, 16);
 }
 
 function LocalIntegrationPanel({

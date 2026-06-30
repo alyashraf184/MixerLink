@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { CompatibilitySnapshot } from "@mixerlink/shared";
+import type { ChannelRackState, CompatibilitySnapshot } from "@mixerlink/shared";
 
 declare global {
   interface Window {
@@ -25,6 +25,7 @@ declare global {
           playing?: boolean;
           tempoBpm?: number;
           script?: string;
+          channelRack?: ChannelRackState;
         };
       }>;
       installFlBridgeScript: () => Promise<{
@@ -42,6 +43,7 @@ declare global {
           playing?: boolean;
           tempoBpm?: number;
           script?: string;
+          channelRack?: ChannelRackState;
         };
       }>;
       getFlBridgeRuntime: () => Promise<{
@@ -50,6 +52,7 @@ declare global {
         playing?: boolean;
         tempoBpm?: number;
         script?: string;
+        channelRack?: ChannelRackState;
       }>;
       onFlBridgeRuntime: (
         callback: (runtime: {
@@ -58,6 +61,7 @@ declare global {
           playing?: boolean;
           tempoBpm?: number;
           script?: string;
+          channelRack?: ChannelRackState;
         }) => void
       ) => () => void;
       onBridgeOperationFromFl: (
