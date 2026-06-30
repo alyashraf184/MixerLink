@@ -144,23 +144,30 @@ function broadcastRoomState(room) {
 function createBridgeState() {
   return {
     transport: "stopped",
-    tempoBpm: 120
+    tempoBpm: 120,
+    channelRack: {
+      channels: [],
+      stepCount: 16,
+      capturedAt: new Date(0).toISOString()
+    }
   };
 }
 
 function applyBridgeOperation(room, operation, collaboratorId) {
   const createdAt = new Date().toISOString();
+  const lastOperation = {
+    type: operation?.type,
+    collaboratorId,
+    createdAt,
+    operation
+  };
 
   switch (operation?.type) {
     case "transport.play":
       room.bridge = {
         ...room.bridge,
         transport: "playing",
-        lastOperation: {
-          type: operation.type,
-          collaboratorId,
-          createdAt
-        }
+        lastOperation
       };
       return "started playback";
 
@@ -168,11 +175,7 @@ function applyBridgeOperation(room, operation, collaboratorId) {
       room.bridge = {
         ...room.bridge,
         transport: "stopped",
-        lastOperation: {
-          type: operation.type,
-          collaboratorId,
-          createdAt
-        }
+        lastOperation
       };
       return "stopped playback";
 
@@ -185,13 +188,99 @@ function applyBridgeOperation(room, operation, collaboratorId) {
       room.bridge = {
         ...room.bridge,
         tempoBpm: bpm,
-        lastOperation: {
-          type: operation.type,
-          collaboratorId,
-          createdAt
-        }
+        lastOperation
       };
       return `set tempo to ${bpm} BPM`;
+    }
+
+    case "channel_rack.snapshot": {
+      if (!Array.isArray(operation.payload?.channels) || operation.payload.channels.length > 128) {
+        return undefined;
+      }
+
+      room.bridge = {
+        ...room.bridge,
+        channelRack: operation.payload,
+        lastOperation
+      };
+      return `shared ${operation.payload.channels.length} Channel Rack channels`;
+    }
+
+    case "channel_rack.channel.updated": {
+      const channel = room.bridge.channelRack.channels.find((candidate) => candidate.index === operation.payload?.index);
+      if (!channel || !operation.payload?.patch || typeof operation.payload.patch !== "object") {
+        return undefined;
+      }
+
+      room.bridge = {
+        ...room.bridge,
+        channelRack: {
+          ...room.bridge.channelRack,
+          channels: room.bridge.channelRack.channels.map((candidate) =>
+            candidate.index === channel.index ? { ...candidate, ...operation.payload.patch } : candidate
+          ),
+          capturedAt: createdAt
+        },
+        lastOperation
+      };
+      return `updated Channel Rack channel ${channel.name}`;
+    }
+
+    case "channel_rack.step.changed": {
+      const channel = room.bridge.channelRack.channels.find((candidate) => candidate.index === operation.payload?.index);
+      const step = Number(operation.payload?.step);
+      if (!channel || !Number.isInteger(step) || step < 0 || step >= 64) {
+        return undefined;
+      }
+
+      room.bridge = {
+        ...room.bridge,
+        channelRack: {
+          ...room.bridge.channelRack,
+          channels: room.bridge.channelRack.channels.map((candidate) => {
+            if (candidate.index !== channel.index) {
+              return candidate;
+            }
+
+            const steps = [...candidate.steps];
+            steps[step] = Boolean(operation.payload.active);
+            return { ...candidate, steps };
+          }),
+          capturedAt: createdAt
+        },
+        lastOperation
+      };
+      return `${operation.payload.active ? "enabled" : "disabled"} step ${step + 1} on ${channel.name}`;
+    }
+
+    case "channel_rack.plugin_parameter.changed": {
+      const channel = room.bridge.channelRack.channels.find((candidate) => candidate.index === operation.payload?.index);
+      const value = Number(operation.payload?.value);
+      if (!channel || !channel.supportedPlugin || !Number.isFinite(value) || value < 0 || value > 1) {
+        return undefined;
+      }
+
+      room.bridge = {
+        ...room.bridge,
+        channelRack: {
+          ...room.bridge.channelRack,
+          channels: room.bridge.channelRack.channels.map((candidate) => {
+            if (candidate.index !== channel.index) {
+              return candidate;
+            }
+
+            return {
+              ...candidate,
+              pluginParameters: candidate.pluginParameters.map((parameter) =>
+                parameter.index === operation.payload.parameterIndex ? { ...parameter, value } : parameter
+              )
+            };
+          }),
+          capturedAt: createdAt
+        },
+        lastOperation
+      };
+      return `updated ${operation.payload.parameterName} on ${channel.name}`;
     }
 
     default:

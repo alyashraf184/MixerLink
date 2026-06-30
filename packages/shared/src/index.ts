@@ -71,15 +71,84 @@ export type BridgeOperation =
       payload: {
         bpm: number;
       };
+    }
+  | {
+      type: "channel_rack.snapshot";
+      payload: ChannelRackState;
+    }
+  | {
+      type: "channel_rack.channel.updated";
+      payload: {
+        index: number;
+        expectedPluginName?: string;
+        patch: Partial<
+          Pick<
+            ChannelRackChannel,
+            "name" | "color" | "muted" | "solo" | "volume" | "pan" | "pitch" | "selected" | "targetMixerTrack"
+          >
+        >;
+      };
+    }
+  | {
+      type: "channel_rack.step.changed";
+      payload: {
+        index: number;
+        expectedPluginName?: string;
+        step: number;
+        active: boolean;
+      };
+    }
+  | {
+      type: "channel_rack.plugin_parameter.changed";
+      payload: {
+        index: number;
+        pluginName: string;
+        parameterIndex: number;
+        parameterName: string;
+        value: number;
+      };
     };
+
+export type ChannelRackPluginParameter = {
+  index: number;
+  name: string;
+  value: number;
+  displayValue?: string;
+};
+
+export type ChannelRackChannel = {
+  index: number;
+  name: string;
+  color: number;
+  type: "sampler" | "hybrid" | "generator" | "layer" | "audio-clip" | "automation-clip" | "unknown";
+  pluginName?: string;
+  supportedPlugin: boolean;
+  muted: boolean;
+  solo: boolean;
+  volume: number;
+  pan: number;
+  pitch: number;
+  selected: boolean;
+  targetMixerTrack: number;
+  steps: boolean[];
+  pluginParameters: ChannelRackPluginParameter[];
+};
+
+export type ChannelRackState = {
+  channels: ChannelRackChannel[];
+  stepCount: number;
+  capturedAt: string;
+};
 
 export type BridgeState = {
   transport: "playing" | "stopped";
   tempoBpm: number;
+  channelRack: ChannelRackState;
   lastOperation?: {
     type: BridgeOperation["type"];
     collaboratorId: string;
     createdAt: string;
+    operation?: BridgeOperation;
   };
 };
 
